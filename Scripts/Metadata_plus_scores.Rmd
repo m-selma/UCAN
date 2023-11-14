@@ -1,0 +1,988 @@
+---
+title: "Metadata_plus_scores"
+output: html_document
+date: "2023-10-30"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+METADATA + CELL SCORES
+------
+```{r}
+library(Seurat)
+library(patchwork)
+library(dplyr)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(ggplot2)
+library(SeuratData)
+library(DESeq2)
+library(gridExtra)
+library(reshape2)
+library('biomaRt')
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(ggdendro)
+library(rlang)
+library(grid)
+library(gtable)
+library(viridis)
+library(InteractiveComplexHeatmap)
+library(clipr)
+```
+
+```{r}
+#counts = read.delim("~/Desktop/CRC/CRC_TPM_1063_counts.csv", sep = ',', header = T, stringsAsFactors = F, row.names = "X")
+
+meta = read.delim("~/Desktop/CRC/Selma/Meta_w_iCMS_status_vers3.csv", sep = ',', header = T, stringsAsFactors = F)
+
+scores = read.delim("~/Desktop/CRC/Supplementary_Table_24.csv", sep = ',', header = T, stringsAsFactors = F)
+```
+
+```{r}
+rownames(meta) = meta$RNA.Tumor.Sample.Barcode
+rownames(scores) = scores$RNA.Tumor.Sample.Barcode
+```
+
+```{r}
+# Removing meta rows that don't have score data 
+keep = which(rownames(meta) %in% scores$RNA.Tumor.Sample.Barcode)
+meta = meta[keep,]
+```
+```{r}
+keep = which(rownames(scores) %in% meta$RNA.Tumor.Sample.Barcode)
+scores = scores[keep,]
+```
+
+```{r}
+meta <- meta %>% arrange(CRPS.Tumour)
+```
+
+Getting the indexes for the different CRPS groups
+```{r}
+indexes <- list()
+for (factor in unique(meta$CRPS.Tumour)) {
+     indexes[[factor]] <- which(meta$CRPS.Tumour == factor)
+}
+indexes
+```
+
+```{r}
+scores <- scores[rownames(meta), ]
+```
+no need but we know the indexes
+```{r}
+meta_split = rep("CRPS1", 727)
+meta_split[200:431] = "CRPS2"
+meta_split[432:573] = "CRPS3"
+meta_split[574:651] = "CRPS4"
+meta_split[652:725] = "CRPS5"
+meta_split[726:727] = "Undefined"
+```
+
+Reorder rows of scores according to rows of meta
+```{r}
+scores$CRPS.Tumour = meta$CRPS.Tumour
+```
+
+Fuse scores to meta
+```{r}
+meta_scores <- cbind(meta, scores)
+```
+
+```{r}
+meta_scores <- as.data.frame(t(meta_scores))
+```
+
+Create slices
+```{r}
+s1 <- (meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),1:197])
+s2 <-(meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),198:423])
+s3 <- (meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),424:562])
+s4 <- (meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),563:640]) 
+s5 <- (meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),641:713])
+s6 <- (meta_scores[c(60,62,84:90,93:100,102:105,107,110,111,113:117,120:123,125:126,128,130:136,138,139,142,144),714:715])
+```
+
+```{r}
+s1[]<-lapply(s1, as.numeric)
+s2[]<-lapply(s2, as.numeric)
+s3[]<-lapply(s3, as.numeric)
+s4[]<-lapply(s4, as.numeric)
+s5[]<-lapply(s5, as.numeric)
+```
+
+No
+```{r}
+class(s1) <- 'numeric'
+class(s2) <- 'numeric'
+class(s3) <- 'numeric' 
+class(s4) <- 'numeric'
+class(s5) <- 'numeric'
+class(s6) <- 'numeric'
+```
+
+```{r}
+meta_sub <- as.data.frame(t(meta_scores[c("CRPS.Tumour","CMS.Tumour","iCMS.pred", "MSI.Status","Tumour.Stage","Pre.Treated"),]))
+colnames(meta_sub) <- c("Uppsala.CRPS","Uppsala.CMS","Selma.iCMS","MSI.Status","Tumour.Stage","Pre.Treated")
+```
+
+
+```{r}
+#split by CRPS status to conserve the grouping in the heatmap
+meta_sub_1 <- meta_sub[meta_sub$Uppsala.CRPS =="CRPS1", ]
+meta_sub_2 <- meta_sub[meta_sub$Uppsala.CRPS =="CRPS2", ]
+meta_sub_3 <- meta_sub[meta_sub$Uppsala.CRPS =="CRPS3", ]
+meta_sub_4 <- meta_sub[meta_sub$Uppsala.CRPS =="CRPS4", ]
+meta_sub_5 <- meta_sub[meta_sub$Uppsala.CRPS =="CRPS5", ]
+```
+
+
+```{r}
+meta_sub_1 <- meta_sub_1[un, ]
+meta_sub_2 <- meta_sub_2[deux, ]
+meta_sub_3 <- meta_sub_3[trois, ]
+meta_sub_4 <- meta_sub_4[quatre, ]
+meta_sub_5 <- meta_sub_5[cinq, ]
+```
+
+```{r}
+# Define the colors you want for your annotation
+cols <- list(
+  Uppsala.CMS = c("CMS1" = "#76448A", "CMS2" = "#85C1E9", "CMS3" = "#16A085", "CMS4" = "#0E6655", "Undefined" = "#EAECEE"),  Selma.iCMS = c('iCMS2'="#D35400", 'iCMS3'="#1E8449","Undefined"="#EAECEE"),
+  MSI.Status = c("MSS" = "#9FE2BF", "MSI" = "#2E86C1"),
+  Tumour.Stage = c("Stage I" = "#DFFF00", "Stage II" = "#FF7F50", "Stage III" = "#DE3163", "Stage IV" = "#43081A"),
+  Pre.Treated = c("Treated" = "#6495ED", "Untreated" = "#CCCCFF")
+
+) 
+
+an1 <- HeatmapAnnotation(df=meta_sub_1[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           col = cols)
+an2 <- HeatmapAnnotation(df=meta_sub_2[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+an3 <- HeatmapAnnotation(df=meta_sub_3[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+an4 <- HeatmapAnnotation(df=meta_sub_4[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+an5 <- HeatmapAnnotation(df=meta_sub_5[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+```
+
+```{r}
+library(grid)
+library(circlize)
+col_fun = colorRamp2(c(0, 1, 2), c("#EAECEE", "blue", "red"))
+col_fun(seq(-3, 3))
+
+hm1 <- Heatmap(s1,
+               cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              name="Scores",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              row_labels = rownames(s1),
+              show_row_names = TRUE,
+                            show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 7),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left",
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS1"),
+              column_title_gp = gpar(fontsize = 8,
+                                     fontface = "bold",fill = c("#DAF7A6"), border="#EAECEE"),
+              bottom_annotation = an1,
+              col = col_fun
+              )
+
+hm2 <- Heatmap(s2,
+               cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              name="Scores",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              row_labels = rownames(s2),
+              show_row_names = TRUE,
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left",
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS2"),
+              column_title_gp = gpar(fontsize = 8,
+                                     fontface = "bold",fill = c("#FFC300"), border="#EAECEE"),
+              bottom_annotation = an2,
+              col = col_fun
+              )
+
+hm3 <- Heatmap(s3,
+               cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              name="Scores",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              row_labels = rownames(s3),
+              show_row_names = TRUE,
+                            show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left",
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS3"),
+              column_title_gp = gpar(fontsize = 8,
+                                     fontface = "bold",
+                                     fill =  c("#FF5733"), 
+                                     border="#EAECEE"),
+              bottom_annotation = an3,
+              col = col_fun
+              )
+
+hm4 <- Heatmap(s4,
+               cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              name="Scores",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              row_labels = rownames(s4),
+              show_row_names = TRUE,
+                            show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left",
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS4"),
+              column_title_gp = gpar(fontsize = 8,
+                                     fontface = "bold",fill = c("#C70039"), border="#EAECEE"),
+              bottom_annotation = an4,
+              col = col_fun
+              )
+
+hm5 <- Heatmap(s5, 
+               cluster_rows = TRUE,
+              cluster_columns = TRUE,
+              name="Scores",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              row_labels = rownames(s5),
+              show_row_names = TRUE,
+                            show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left",
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS5"),
+              column_title_gp = gpar(fontsize = 8,hjust = 0.5,vjust = 0.5,
+                                     fontface = "bold",fill = c("#900C3F"), border="#EAECEE"),
+              bottom_annotation = an5,
+              col = col_fun
+              )
+
+hm_list = hm1+hm2+hm3+hm4+hm5
+hm_list = draw(hm_list, ht_gap = unit(0.8, "mm"), merge_legend=TRUE)
+```
+
+```{r}
+#Get col order from heatmap after clustering
+column_order <- column_order(hm_list)
+```
+```{r}
+# then use write_clip(column_order$matrix_xyz) to copy it into clipboard and make your own vectors
+un = c(96, 58, 26, 134, 53, 25, 52, 136, 135, 111, 79, 60, 45, 5, 73, 163, 83, 46, 188, 11, 155, 122, 192, 98, 182, 146, 
+13, 21, 74, 195, 124, 168, 106, 95, 147, 158, 10, 71, 32, 40, 49, 194, 148, 37, 157, 44, 3, 92, 67, 110, 165, 34, 
+152, 18, 120, 69, 30, 169, 20, 184, 38, 179, 9, 138, 100, 144, 68, 170, 112, 81, 17, 88, 151, 159, 15, 80, 113, 91, 
+28, 41, 119, 114, 82, 7, 31, 77, 171, 29, 70, 61, 174, 105, 141, 108, 116, 87, 121, 137, 109, 33, 36, 183, 27, 86, 
+172, 76, 99, 4, 63, 156, 193, 133, 186, 1, 139, 131, 94, 103, 66, 57, 161, 115, 166, 164, 127, 2, 47, 62, 64, 14, 
+24, 85, 176, 173, 142, 128, 175, 102, 93, 187, 75, 196, 132, 23, 89, 189, 177, 162, 130, 154, 185, 145, 50, 6, 78, 126, 
+125, 149, 160, 19, 107, 190, 123, 178, 48, 143, 54, 104, 90, 197, 167, 118, 153, 39, 181, 191, 42, 43, 101, 129, 8, 59, 
+180, 72, 65, 56, 97, 84, 35, 22, 51, 16, 117, 12, 150, 140, 55)
+
+
+deux = c(158, 19, 198, 114, 34, 165, 139, 216, 44, 203, 13, 196, 68, 67, 111, 77, 173, 48, 45, 93, 180, 136, 174, 109, 172, 145, 
+69, 103, 144, 87, 36, 56, 112, 84, 156, 166, 23, 169, 62, 105, 146, 123, 147, 170, 38, 89, 153, 183, 204, 18, 31, 218, 
+162, 184, 8, 176, 154, 53, 122, 200, 50, 197, 199, 224, 119, 88, 126, 97, 127, 57, 185, 70, 20, 102, 181, 7, 91, 85, 
+47, 60, 161, 163, 49, 35, 188, 201, 86, 115, 148, 17, 29, 83, 64, 164, 143, 211, 177, 30, 193, 65, 210, 2, 190, 79, 
+175, 32, 76, 131, 138, 90, 133, 78, 71, 160, 140, 51, 101, 9, 225, 24, 124, 202, 155, 168, 150, 152, 129, 3, 26, 128, 
+205, 208, 58, 186, 191, 40, 6, 98, 54, 117, 46, 179, 110, 41, 74, 22, 226, 220, 108, 135, 39, 157, 92, 96, 189, 72, 
+116, 73, 125, 15, 107, 28, 219, 61, 1, 221, 25, 100, 27, 37, 214, 95, 21, 10, 63, 104, 4, 132, 134, 149, 16, 137, 
+80, 94, 187, 206, 167, 209, 215, 195, 33, 121, 120, 182, 55, 118, 66, 217, 82, 223, 43, 159, 14, 75, 142, 213, 42, 106, 
+192, 222, 141, 81, 99, 207, 113, 194, 212, 52, 171, 151, 178, 130, 5, 11, 12, 59)
+
+trois = c(116, 92, 69, 88, 99, 132, 91, 133, 115, 57, 100, 97, 86, 93, 84, 95, 49, 108, 126, 114, 137, 71, 31, 29, 17, 8, 
+107, 134, 2, 83, 70, 65, 66, 34, 10, 106, 109, 59, 101, 82, 37, 14, 76, 124, 72, 98, 119, 78, 102, 90, 103, 75, 
+89, 118, 111, 53, 21, 127, 22, 125, 18, 1, 50, 33, 7, 20, 63, 48, 129, 44, 30, 77, 58, 68, 43, 13, 135, 131, 
+12, 117, 41, 11, 121, 60, 81, 40, 139, 94, 79, 138, 136, 24, 123, 61, 47, 35, 16, 85, 74, 39, 87, 122, 96, 110, 
+56, 54, 105, 113, 104, 23, 51, 62, 42, 45, 120, 64, 36, 5, 3, 32, 38, 25, 19, 80, 55, 112, 6, 46, 15, 128, 
+4, 52, 130, 9, 26, 27, 28, 67, 73)
+
+  
+quatre = c(21, 34, 35, 49, 57, 64, 59, 25, 31, 33, 44, 45, 74, 38, 58, 42, 41, 20, 29, 56, 15, 32, 67, 16, 17, 36, 22, 19, 
+73, 27, 14, 76, 13, 52, 53, 61, 55, 39, 62, 37, 23, 69, 54, 26, 77, 48, 30, 68, 75, 51, 28, 78, 66, 12, 46, 
+47, 72, 60, 70, 65, 63, 71, 43, 18, 24, 50, 40, 4, 5, 10, 11, 8, 7, 9, 6, 3, 2, 1)
+  
+cinq = c(2, 3, 4, 10, 39, 16, 29, 65, 24, 66, 69, 35, 36, 28, 70, 34, 52, 44, 58, 9, 11, 5, 6, 8, 1, 48, 47, 33, 67, 46, 
+72, 49, 27, 38, 21, 42, 14, 15, 56, 57, 7, 71, 53, 54, 61, 51, 18, 20, 12, 22, 31, 26, 73, 40, 55, 62, 41, 17, 
+32, 64, 19, 25, 23, 68, 60, 43, 13, 50, 63, 30, 45, 37, 59)
+
+```
+
+
+
+
+DRIVER GENES EXPLORATION/MUTATIONS 
+----
+```{r}
+mut = read.delim("~/Desktop/CRC/CRC_MutationStatus_1063.csv", sep = ',', header = T, stringsAsFactors = F)
+```
+
+```{r}
+# Counts, patient metadata, scores
+cnts = read.delim("~/Desktop/CRC/CRC_TPM_1063_counts.csv", sep = ',', header = T, stringsAsFactors = F, row.names = "X")
+```
+
+Replace specific muts with types
+```{r}
+#mut[] <- lapply(mut, function(x) gsub(";.*", "Multi_hit", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl(";", x), "Multi_hit", x))
+mut[] <- lapply(mut, function(x) gsub(".*\\*.*", "Truncating", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("wt", x), "WT", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("dup", x), "Inframe", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("delins", x), "Frameshift", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("del", x), "Inframe", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("ins", x), "Inframe", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("plice", x), "Splice", x))
+mut[] <- lapply(mut, function(x) ifelse(grepl("^p\\.", x), "Missense", x))
+```
+Reformatting
+```{r}
+rownames(mut) <- mut$Patient_ID
+```
+```{r}
+mut$Patient_ID <- NULL
+```
+Mut stats df
+```{r}
+mut_stats <- data.frame(Features = colnames(mut),
+                        #WT = colSums(mut[,]=="WT"),
+                        Multi_hit = colSums(mut[,]=="Multi_hit"),
+                        Truncating = colSums(mut[,]=="Truncating"),
+                        Missense = colSums(mut[,]=="Missense"),
+                        Inframe = colSums(mut[,]=="Inframe"),
+                        Splice = colSums(mut[,]=="Splice"),
+                        Frameshift = colSums(mut[,]=="Frameshift")
+                        )
+rownames(mut_stats) = mut_stats$Features
+#mut_stats$Features = NULL
+```
+Barplot
+```{r}
+# Create the stacked barplot
+# Calculate the total for each category
+mut_stats$Total <- rowSums(mut_stats[, -c(1)]) #run once only
+
+# Order categories by total
+mut_stats <- mut_stats[order(mut_stats$Total), ]
+
+# Create a new factor for reordered Category
+mut_stats$Features <- factor(mut_stats$Features, levels = mut_stats$Features)
+mut_stats <- mut_stats[-c(1,2), ]
+```
+Percentages - ignore
+```{r}
+row_sums <- rowSums(mut_stats[, -c(1,9)])
+mut_perc <- round(mut_stats[, -c(1,9)] / row_sums *100)
+mut_perc <- mut_perc[-c(1,2), ]
+mut_perc$Features <- rownames(mut_perc)
+```
+
+```{r}
+library(tidyr)
+# Convert data to long format and calculate cumulative sums
+mut_stats_long <- mut_stats %>%
+  pivot_longer(!c(Features, Total)) %>%
+  group_by(Features) %>%
+  mutate(cumulative_sum = cumsum(value))
+```
+
+```{r}
+legend_order <- c("Missense", "Truncating","Multi_hit","Splice","Inframe","Frameshift")
+
+ggplot(mut_stats_long, aes(fill=name, y=Features, x=value)) + 
+    geom_bar(position="stack", stat="identity")+
+   labs(title = "Driver Genes Mutation Status", x = '# of Samples', y = "") +
+  scale_fill_manual(values = c("Multi_hit" = "#FF5733", "Truncating" = "#2E86AB",
+                               "Missense" = "#F2C53D", "Inframe" = "#75B79E", "Splice" = "#93E8F1",
+                               "Frameshift" = "#900C3F"),
+                      breaks = legend_order) +
+  theme_minimal()+
+  theme(panel.grid.major.y = element_blank())
+  
+```
+
+###
+Plot of frequency of mutations by CRPS class
+```{r}
+mut$Patient_ID <- gsub("-", ".", mut$Patient_ID)
+rownames(mut) = mut$Patient_ID
+mut2 = mut
+```
+```{r}
+mut2 = mut2[which(rownames(mut2) %in% rownames(meta_c)),]
+```
+
+```{r}
+mut2$Patient_ID <- NULL
+```
+```{r}
+mut_crps <- merge(mut2, meta_c, by = 0, all = TRUE)
+```
+```{r}
+rownames(mut_crps) <- mut_crps$Row.names
+mut_crps[,c(49:82,84:103)] <- NULL
+```
+Split that by crps
+```{r}
+mut_crps$Row.names<-NULL
+mut_crps1 <- mut_crps[mut_crps$CRPS.Tumour == "CRPS1",]
+mut_crps2 <- mut_crps[mut_crps$CRPS.Tumour == "CRPS2",]
+mut_crps3 <- mut_crps[mut_crps$CRPS.Tumour == "CRPS3",]
+mut_crps4 <- mut_crps[mut_crps$CRPS.Tumour == "CRPS4",]
+mut_crps5 <- mut_crps[mut_crps$CRPS.Tumour == "CRPS5",]
+mut_crpsu <- mut_crps[mut_crps$CRPS.Tumour == "Undefined",]
+```
+```{r}
+mut_crps1$CRPS.Tumour <- NULL
+mut_crps2$CRPS.Tumour <- NULL
+mut_crps3$CRPS.Tumour <- NULL
+mut_crps4$CRPS.Tumour <- NULL
+mut_crps5$CRPS.Tumour <- NULL
+mut_crpsu$CRPS.Tumour <- NULL
+```
+
+Counts of mutations per gene per crps cluster
+
+No
+```{r}
+mut_freq_1 <- colSums(apply(mut_crps1, 2, function(x) sum(x != "WT")))
+mut_freq_2 <- colSums(apply(mut_crps2, 2, function(x) sum(x != "WT")))
+mut_freq_3 <- colSums(apply(mut_crps3, 2, function(x) sum(x != "WT")))
+mut_freq_4 <- colSums(apply(mut_crps4, 2, function(x) sum(x != "WT")))
+mut_freq_5 <- colSums(apply(mut_crps5, 2, function(x) sum(x != "WT")))
+mut_freq_u <- colSums(apply(mut_crpsu, 2, function(x) sum(x != "WT")))
+```
+
+```{r}
+mut_crps1_reshaped <- as.data.frame(lapply(mut_crps1, function(x) as.integer(x != "WT")))
+mut_freq_1 <- colSums(mut_crps1_reshaped)
+
+mut_crps2_reshaped <- as.data.frame(lapply(mut_crps2, function(x) as.integer(x != "WT")))
+mut_freq_2 <- colSums(mut_crps2_reshaped)
+
+mut_crps3_reshaped <- as.data.frame(lapply(mut_crps3, function(x) as.integer(x != "WT")))
+mut_freq_3 <- colSums(mut_crps3_reshaped)
+
+mut_crps4_reshaped <- as.data.frame(lapply(mut_crps4, function(x) as.integer(x != "WT")))
+mut_freq_4 <- colSums(mut_crps4_reshaped)
+
+mut_crps5_reshaped <- as.data.frame(lapply(mut_crps5, function(x) as.integer(x != "WT")))
+mut_freq_5 <- colSums(mut_crps5_reshaped)
+
+mut_crpsu_reshaped <- as.data.frame(lapply(mut_crpsu, function(x) as.integer(x != "WT")))
+mut_freq_u <- colSums(mut_crpsu_reshaped)
+
+```
+
+```{r}
+cluster_data <- list(
+  CRPS1 = mut_freq_1,
+  CRPS2 = mut_freq_2,
+  CRPS3 = mut_freq_3,
+  CRPS4 = mut_freq_4,
+  CRPS5 = mut_freq_5,
+  Undefined = mut_freq_u
+)
+mut_crps_df <- as.data.frame(cluster_data)
+mut_crps_df$Undefined <- NULL
+```
+
+```{r}
+library(tidyr)
+mut_crps_df$Gene <- rownames(mut_crps_df)
+data_long <- gather(mut_crps_df, Cluster, Count, -Gene)
+
+#data_long$Gene <- factor(data_long$Gene, levels = data_long$Gene[order(data_long$Count, decreasing = TRUE)])
+
+# Create the heatmap using ggplot2
+ggplot(data_long, aes(x = Cluster, y = Gene, fill = Count)) +
+  geom_tile() +
+  scale_fill_gradient(low = "white", high = "red") +
+  theme_minimal() +
+  labs(title = "", x = "", y = "Driver Genes", fill = "Mutation Count") +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1),
+        axis.text.y = element_text(size = 5.2))
+
+```
+
+Add annotations and plot by pathway
+```{r}
+mut_crps_df$Pathway <- 1
+```
+```{r}
+mut_crps_df$Pathway[mut_crps_df$Gene == "SOX9"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "CTNNB1"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "TCF7L2"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "RNF43"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "APC"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "AMER1"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "MAP2K1"] <- "WNT"
+mut_crps_df$Pathway[mut_crps_df$Gene == "HITS1H3C"] <- "WNT"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "TP53"] <- "P53"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ATM"] <- "P53"
+mut_crps_df$Pathway[mut_crps_df$Gene == "EPHA3"] <- "P53"
+mut_crps_df$Pathway[mut_crps_df$Gene == "CARD11"] <- "P53"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ASXL1"] <- "P53"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "SMAD2"] <- "TGF_b"
+mut_crps_df$Pathway[mut_crps_df$Gene == "SMAD3"] <- "TGF_b"
+mut_crps_df$Pathway[mut_crps_df$Gene == "SMAD4"] <- "TGF_b"
+mut_crps_df$Pathway[mut_crps_df$Gene == "INHBA"] <- "TGF_b"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PDGRA"] <- "TGF_b"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "B2M"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "AKT1"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PIK3R1"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PIK3CA"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PTEN"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PIK3CG"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "EPHA5"] <- "PI3K"
+mut_crps_df$Pathway[mut_crps_df$Gene == "GRIN2A"] <- "PI3K"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "GNAS"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ERBB2"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ERBB3"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "NRAS"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "KRAS"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "BRAF"] <- "RTK_RAS"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "CDKN1B"] <- "Cell_cycle"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ARID1A"] <- "Cell_cycle"
+mut_crps_df$Pathway[mut_crps_df$Gene == "CDKN2A"] <- "Cell_cycle"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PTPRT"] <- "Cell_cycle"
+mut_crps_df$Pathway[mut_crps_df$Gene == "PTPRS"] <- "Cell_cycle"
+mut_crps_df$Pathway[mut_crps_df$Gene == "ERBB4"] <- "Cell_cycle"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "RBM10"] <- "Transcription"
+mut_crps_df$Pathway[mut_crps_df$Gene == "TBX3"] <- "Transcription"
+mut_crps_df$Pathway[mut_crps_df$Gene == "FOXP1"] <- "Transcription"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "FBXW7"] <- "NOTCH"
+mut_crps_df$Pathway[mut_crps_df$Gene == "FLT4"] <- "NOTCH"
+mut_crps_df$Pathway[mut_crps_df$Gene == "EPHB1"] <- "NOTCH"
+#
+mut_crps_df$Pathway[mut_crps_df$Gene == "NRAS"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "MAP2K4"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "IKZF1"] <- "RTK_RAS"
+mut_crps_df$Pathway[mut_crps_df$Gene == "JUN"] <- "RTK_RAS"
+```
+
+```{r}
+# Define the order of pathways
+pathway_order <- mut_crps_df %>% arrange(Pathway) %>% distinct(Pathway) %>% pull(Pathway)
+
+# Reorder the genes by pathway
+mut_crps_df <- mut_crps_df %>%
+  arrange(factor(Pathway, levels = pathway_order))
+```
+
+
+```{r}
+# Melt the dataframe into long format
+df_long <- mut_crps_df %>%
+  gather(Cluster, Count, -Gene, -Pathway)
+```
+
+
+```{r}
+# Create the plot
+ggplot(df_long, aes(x = Cluster, y = Gene, fill = Count)) +
+  geom_tile() +
+  scale_fill_gradient(low = "lightblue", high = "red") +
+  theme_minimal() +
+  labs(
+    title = "",
+    x = "",
+    y = "",
+    fill = "# of Patients with Mutations"
+  ) +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1),
+    axis.text.y = element_text(size = 6)  # Adjust the size as needed
+  ) +
+  facet_grid(. ~ Pathway) +
+  scale_x_discrete(position = "bottom")  # Display the clusters on top
+```
+
+EXPRESSION OF DRIVER GENES
+-----
+Get driver genes in hgnc
+```{r}
+# Making a mart object with ensembl ID to hgnc symbol equivalency
+library('biomaRt')
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- rownames(cnts)
+g_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","hgnc_symbol"),values=genes,mart= mart)
+
+# Removing duplicates
+dup = g_list$hgnc_symbol[which(duplicated(g_list$hgnc_symbol))]
+g_list$dup = FALSE
+g_list$dup[which(g_list$hgnc_symbol %in% dup)] <- TRUE
+g_list$hgnc_symbol[which(g_list$dup == TRUE)] <- g_list$ensembl_gene_id[which(g_list$dup == TRUE)]
+```
+```{r}
+driver_cnts = cnts
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+keep = which(rownames(driver_cnts) %in% g_list$ensembl_gene_id ) 
+driver_cnts = driver_cnts[keep,]
+m = match(rownames(driver_cnts) , g_list$ensembl_gene_id)
+rownames(driver_cnts) <- g_list$hgnc_symbol[m]
+```
+```{r}
+dr_genes = colnames(mut)
+#keep counts for those only
+keep = which(rownames(driver_cnts) %in% dr_genes)
+driver_cnts = driver_cnts[keep,]
+```
+
+```{r}
+meta_c <- read.csv(file = "~/Desktop/CRC/Selma/Meta_w_iCMS_status_vers3.csv")
+rownames(meta_c) <- meta_c$RNA.Tumor.Sample.Barcode
+```
+```{r}
+keep = which(colnames(driver_cnts) %in% rownames(meta_c))
+driver_cnts = driver_cnts[,keep]
+```
+
+```{r}
+meta_c  <- meta_c [,c("CRPS.Tumour","CMS.Tumour","iCMS.pred", "MSI.Status","Tumour.Stage","Pre.Treated")]
+colnames(meta_c) <- c("Uppsala.CRPS","Uppsala.CMS","Selma.iCMS", "MSI.Status","Tumour.Stage","Pre.Treated")
+#
+meta_c <- meta_c %>% arrange(Uppsala.CRPS)
+meta_c_1 <- meta_c[meta_c$Uppsala.CRPS =="CRPS1", ]
+meta_c_2 <- meta_c[meta_c$Uppsala.CRPS =="CRPS2", ]
+meta_c_3 <- meta_c[meta_c$Uppsala.CRPS =="CRPS3", ]
+meta_c_4 <- meta_c[meta_c$Uppsala.CRPS =="CRPS4", ]
+meta_c_5 <- meta_c[meta_c$Uppsala.CRPS =="CRPS5", ]
+meta_c_6 <- meta_c[meta_c$Uppsala.CRPS =="Undefined", ]
+```
+Order counts in same order as meta
+```{r}
+driver_cnts <- driver_cnts[,rownames(meta_c)]
+```
+```{r}
+driver_cnts <- round(driver_cnts)
+```
+
+```{r}
+library(DESeq2)
+dds <- DESeqDataSetFromMatrix(countData = driver_cnts,colData = meta_c,~ CRPS.Tumour)
+
+# Perform normalization
+dds <- DESeq(dds)
+
+# Extract normalized counts
+normalized_counts <- counts(dds, normalized = TRUE)
+
+# Scale the normalized counts
+scaled_normalized_counts <- scale(normalized_counts)
+
+driver_cnts <- scaled_normalized_counts
+
+```
+
+Get z score for each row/gene
+```{r}
+driver_cnts_z <- t(apply(driver_cnts,1,scale)) 
+```
+```{r}
+colnames(driver_cnts_z) <- colnames(driver_cnts) 
+```
+
+Create slices
+```{r}
+c1 <- driver_cnts_z[,1:299]
+c2 <- driver_cnts_z[,300:587]
+c3 <- driver_cnts_z[,588:805]
+c4 <- driver_cnts_z[,806:935]
+c5 <- driver_cnts_z[,936:1048]
+c6 <- driver_cnts_z[,1049:1051]
+```
+
+Annotation heatmaps
+```{r}
+# Define the colors you want for your annotation
+cols <- list(
+  Uppsala.CMS = c("CMS1" = "#76448A", "CMS2" = "#85C1E9", "CMS3" = "#16A085", "CMS4" = "#0E6655", "Undefined" = "#EAECEE"),
+  MSI.Status = c("MSS" = "#9FE2BF", "MSI" = "#2E86C1"),
+  Tumour.Stage = c("Stage I" = "#DFFF00", "Stage II" = "#FF7F50", "Stage III" = "#DE3163", "Stage IV" = "#43081A"),
+  Pre.Treated = c("Treated" = "#6495ED", "Untreated" = "#CCCCFF"), 
+  Selma.iCMS = c('iCMS2'="#D35400", 'iCMS3'="#1E8449","Undefined"="#EAECEE")
+) 
+
+anno1 <- HeatmapAnnotation(df=meta_c_1[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           col = cols)
+anno2 <- HeatmapAnnotation(df=meta_c_2[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno3 <- HeatmapAnnotation(df=meta_c_3[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno4 <- HeatmapAnnotation(df=meta_c_4[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno5 <- HeatmapAnnotation(df=meta_c_5[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno6 <- HeatmapAnnotation(df=meta_c_6[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+#then run again the heatmap script
+```
+
+HEATMAP
+```{r}
+library(grid)
+
+h1 <- Heatmap(c1,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              name="Z-score",
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c1), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS1"),
+              column_title_gp = gpar(fontsize = 8, vjust = 0.5, col = "#DAF7A6",
+                                     fontface = "bold",fill = c("#DAF7A6"), border="#EAECEE"),
+              bottom_annotation = anno1
+              )
+
+h2 <- Heatmap(c2,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_row_dend = FALSE,
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c2), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS2"),
+              column_title_gp = gpar(fontsize = 8, vjust = 0.5,col = "#FFC300",
+                                     fontface = "bold",fill = c("#FFC300"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno2
+              )
+
+h3 <- Heatmap(c3,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c3), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS3"),
+              column_title_gp = gpar(fontsize = 8, vjust = 0.5,col = "#FF5733",
+                                     fontface = "bold",fill = c("#FF5733"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno3
+              )
+
+h4 <- Heatmap(c4,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c4), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS4"),
+              column_title_gp = gpar(fontsize = 8, vjust = 0.5,col = "#C70039",
+                                     fontface = "bold",fill = c("#C70039"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno4
+              )
+
+h5 <- Heatmap(c5,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              show_row_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c5), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS5"),
+              column_title_gp = gpar(fontsize = 8, vjust = 0.5,col = "#900C3F",
+                                     fontface = "bold",fill = c("#900C3F"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno5
+              )
+
+#h6 <- Heatmap(c6,cluster_rows = TRUE,
+              # cluster_columns = TRUE, 
+              # show_column_dend = FALSE,
+              # column_dend_side = "bottom", 
+              # row_labels = rownames(c6), 
+              # show_column_names = FALSE,
+              # row_names_gp = gpar(fontsize = 5),
+              # column_names_gp = gpar(fontsize = 5),
+              # row_names_side = "left", 
+              # row_dend_side = "left", 
+              # row_names_centered = FALSE,
+              # border_gp = gpar(col = "#EAECEE",lw=20),
+              # column_title = c("."),
+              # column_title_gp = gpar(fontsize = 8, 
+              #                        fontface = "bold",fill = c("#DAF7A6"), border="#EAECEE"),
+              # show_heatmap_legend = FALSE,
+              # bottom_annotation = anno6
+              # )
+
+h_list = h1+h2+h3+h4+h5#+h6
+h_list = draw(h_list, ht_gap = unit(0.8, "mm"), merge_legend=TRUE)
+```
+
+```{r}
+#Get col order from heatmap after clustering
+column_order <- column_order(h_list)
+```
+```{r}
+# then use write_clip(column_order$matrix_xyz) to copy it into clipboard and make your own vectors
+un = c(
+  94, 223, 267, 212, 216, 42, 182, 76, 155, 172, 178, 32, 1, 145, 35, 51, 120, 134, 4, 222, 150, 221, 225, 118, 132, 3,
+  19, 127, 289, 190, 219, 180, 188, 268, 128, 213, 198, 29, 226, 270, 244, 111, 258, 214, 23, 7, 246, 243, 236, 56, 36, 13,
+  11, 59, 28, 123, 278, 67, 49, 283, 75, 149, 8, 168, 22, 92, 157, 108, 163, 249, 255, 224, 91, 55, 50, 82, 27, 90,
+  77, 88, 26, 135, 47, 53, 33, 66, 292, 193, 211, 184, 218, 191, 96, 72, 181, 186, 202, 169, 165, 197, 61, 2, 130, 122,
+  146, 58, 199, 44, 34, 138, 25, 192, 103, 62, 6, 200, 106, 275, 257, 256, 167, 183, 217, 235, 250, 156, 9, 80, 114, 159,
+  129, 175, 195, 265, 85, 5, 124, 14, 24, 173, 187, 139, 293, 143, 18, 239, 242, 234, 209, 113, 298, 297, 220, 109, 97, 133,
+  16, 43, 153, 152, 37, 20, 84, 104, 89, 161, 110, 65, 69, 116, 147, 17, 136, 280, 281, 142, 179, 86, 54, 240, 231, 241,
+  12, 95, 60, 237, 78, 230, 117, 100, 73, 238, 151, 112, 39, 144, 272, 74, 174, 131, 170, 201, 210, 233, 70, 164, 247, 79,
+  31, 254, 228, 229, 206, 93, 81, 189, 185, 203, 207, 232, 294, 260, 266, 140, 252, 262, 271, 40, 204, 15, 45, 208, 119, 38,
+  121, 141, 98, 274, 99, 41, 251, 290, 107, 154, 101, 160, 52, 148, 48, 46, 299, 10, 71, 176, 83, 158, 21, 30, 263, 196,
+  177, 137, 171, 166, 64, 248, 63, 205, 68, 295, 105, 162, 227, 125, 126, 276, 259, 253, 245, 277, 284, 286, 287, 264, 261, 57,
+  291, 87, 102, 282, 269, 296, 285, 215, 194, 279, 115, 288, 273
+)
+
+deux = c(
+    66, 288, 231, 223, 155, 209, 79, 98, 266, 120, 175, 150, 142, 172, 145, 12, 237, 190, 103, 60, 195, 188, 37, 140, 273, 268,
+    185, 67, 125, 131, 11, 216, 97, 279, 262, 52, 210, 69, 7, 88, 127, 234, 229, 45, 50, 104, 245, 270, 247, 106, 208, 71,
+    263, 39, 271, 174, 128, 80, 77, 85, 61, 138, 124, 75, 164, 149, 76, 252, 10, 255, 203, 23, 53, 220, 259, 274, 226, 118,
+    233, 101, 78, 137, 26, 36, 130, 107, 24, 260, 41, 212, 136, 282, 15, 148, 9, 83, 163, 35, 244, 224, 20, 115, 177, 95,
+    254, 162, 62, 243, 283, 240, 173, 49, 168, 272, 198, 261, 40, 42, 123, 211, 246, 171, 253, 228, 27, 114, 280, 70, 204, 121,
+    264, 189, 153, 251, 276, 141, 152, 74, 186, 201, 72, 197, 158, 154, 167, 44, 63, 161, 191, 33, 87, 165, 46, 129, 182, 126,
+    179, 14, 84, 180, 181, 143, 139, 267, 2, 28, 100, 278, 184, 102, 269, 265, 30, 21, 257, 281, 277, 92, 239, 215, 232, 157,
+    193, 113, 178, 200, 22, 109, 287, 202, 236, 241, 29, 169, 58, 170, 57, 18, 132, 119, 116, 122, 81, 213, 5, 16, 65, 82,
+    19, 55, 111, 68, 59, 205, 192, 249, 235, 56, 187, 112, 90, 48, 91, 206, 275, 207, 93, 54, 64, 96, 31, 3, 285, 258,
+    176, 194, 8, 51, 43, 117, 110, 250, 238, 217, 225, 221, 94, 256, 86, 160, 199, 286, 108, 38, 25, 47, 89, 4, 166, 183,
+    144, 34, 227, 159, 6, 135, 214, 133, 196, 151, 73, 134, 105, 284, 32, 146, 147, 230, 219, 156, 1, 222, 99, 17, 218, 242, 13, 248
+)
+
+trois = c(
+  180, 218, 167, 18, 116, 53, 19, 72, 7, 138, 45, 144, 1, 124, 110, 60, 8, 120, 40, 165, 36, 198, 44, 211, 150, 26,
+  2, 143, 132, 130, 49, 111, 6, 151, 31, 92, 141, 75, 12, 135, 73, 93, 51, 136, 113, 24, 14, 190, 142, 46, 139, 64,
+  122, 81, 183, 182, 100, 119, 32, 114, 162, 85, 126, 55, 52, 118, 97, 98, 29, 59, 3, 196, 133, 134, 47, 109, 185, 103,
+  83, 86, 178, 15, 87, 208, 56, 22, 121, 76, 173, 164, 179, 209, 115, 201, 195, 105, 33, 25, 16, 101, 38, 13, 99, 106,
+  30, 89, 42, 69, 78, 84, 17, 82, 117, 104, 127, 66, 108, 62, 11, 61, 43, 123, 58, 9, 88, 199, 131, 34, 188, 160,
+  21, 94, 91, 95, 5, 157, 189, 215, 169, 171, 204, 202, 172, 27, 192, 112, 206, 71, 39, 186, 159, 57, 41, 174, 207, 205,
+  161, 175, 197, 176, 163, 145, 107, 96, 37, 20, 79, 35, 4, 77, 74, 153, 170, 200, 187, 65, 102, 156, 147, 28, 80, 90,
+  216, 48, 137, 54, 63, 50, 23, 191, 193, 148, 149, 154, 68, 213, 129, 166, 140, 217, 212, 146, 152, 181, 158, 177, 125, 67,
+  203, 168, 194, 128, 155, 184, 70, 210, 214, 10
+)
+
+quatre = c(
+  11, 128, 1, 23, 71, 106, 122, 29, 110, 14, 46, 24, 33, 9, 53, 81, 90, 41, 59, 15, 55, 66, 126, 125, 47, 19,
+  2, 40, 8, 98, 25, 96, 35, 129, 54, 120, 58, 6, 10, 118, 48, 95, 20, 65, 52, 3, 70, 87, 61, 69, 30, 18,
+  43, 36, 45, 4, 104, 105, 5, 34, 121, 117, 115, 101, 37, 92, 91, 103, 67, 82, 49, 102, 88, 31, 109, 44, 113, 123,
+  57, 107, 111, 84, 27, 17, 77, 42, 28, 89, 97, 116, 130, 119, 108, 72, 94, 93, 12, 68, 7, 86, 79, 38, 63, 85,
+  51, 80, 73, 127, 78, 50, 75, 112, 114, 76, 56, 64, 32, 99, 22, 60, 39, 100, 62, 26, 74, 83, 21, 124, 16, 13
+)
+
+cinq = c(
+  9, 102, 80, 59, 101, 87, 3, 28, 40, 53, 82, 1, 88, 83, 90, 39, 106, 41, 113, 89, 24, 30, 12, 27, 64, 95,
+  111, 77, 48, 38, 43, 21, 5, 72, 107, 35, 67, 4, 50, 75, 54, 60, 7, 65, 22, 17, 68, 97, 8, 32, 70, 34,
+  71, 73, 19, 63, 42, 96, 110, 52, 10, 44, 11, 49, 93, 76, 56, 26, 16, 103, 66, 51, 13, 2, 92, 36, 74, 98,
+  81, 99, 86, 45, 6, 91, 61, 47, 100, 46, 20, 23, 69, 31, 55, 37, 58, 15, 29, 62, 57, 94, 108, 105, 84, 104,
+  85, 78, 109, 18, 33, 112, 14, 79, 25
+)
+
+
+six = c(2,1,3)
+
+```
+
+```{r}
+meta_c_1 <- meta_c_1[ un,]
+meta_c_2 <- meta_c_2[deux,]
+meta_c_3 <- meta_c_3[trois,]
+meta_c_4 <- meta_c_4[quatre,]
+meta_c_5 <- meta_c_5[cinq,]
+meta_c_6 <- meta_c_6[six,]
+#Then run anno and heatmap again
+```
+
