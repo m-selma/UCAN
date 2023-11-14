@@ -1,0 +1,123 @@
+library(Seurat)
+library(SeuratData)
+library(patchwork)
+library(dplyr)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(ggplot2)
+
+# Load counts, metadata, scores csv files
+cnts = read.delim("~/Desktop/CRC/CRC_TPM_1063_counts.csv", sep = ',', header = T, stringsAsFactors = F, row.names = "X")
+
+Meta = read.delim("~/Desktop/CRC/Supplementary_Table_01_patient_metadata.csv", sep = ',', header = T, stringsAsFactors = F)
+
+Scores = read.delim("~/Desktop/CRC/Supplementary_Table_24.csv", sep = ',', header = T, stringsAsFactors = F)
+
+# Remove counts columns that don't have patient metadata 
+keep = which(colnames(cnts) %in% gsub("-",".",Meta$DNA.Tumor.Sample.Barcode))
+cnts = cnts[,keep] 
+
+
+## Gene mapping
+
+# Make a mart object with ensembl ID to hgnc symbol equivalency
+library('biomaRt')
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- rownames(cnts)
+g_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","hgnc_symbol"),values=genes,mart= mart)
+
+# Remove duplicates
+dup = g_list$hgnc_symbol[which(duplicated(g_list$hgnc_symbol))]
+g_list$dup = FALSE
+g_list$dup[which(g_list$hgnc_symbol %in% dup)] <- TRUE
+g_list$hgnc_symbol[which(g_list$dup == TRUE)] <- g_list$ensembl_gene_id[which(g_list$dup == TRUE)]
+
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+keep = which(rownames(cnts) %in% g_list$ensembl_gene_id ) 
+cnts = cnts[keep,]
+m = match(rownames(cnts) , g_list$ensembl_gene_id)
+rownames(cnts) <- g_list$hgnc_symbol[m]
+
+## Seurat processing pipeline
+# Note: cannot run FindVariableFeatures in Seurat without transforming cnts from data.frame object class to dgCMatrix because the format isn't supported. So do conversion first
+cnts <- round(cnts)
+obj = CreateSeuratObject(counts = Matrix::Matrix(as.matrix(cnts),sparse = T))
+
+# Normalize data
+obj <- NormalizeData(obj, normalization.method = "LogNormalize", scale.factor = 1000000)
+
+# Identify highly variable features and scale data
+obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = 2000)
+obj <- ScaleData(obj, features = rownames(obj))
+
+# Perform linear dimensional reduction
+obj <- RunPCA(obj, features = VariableFeatures(object = obj))
+
+# UMAP
+obj <- FindNeighbors(obj, dims = 1:20,k.param = 20)
+obj <- FindClusters(obj, resolution = 0.6,dims = 1:20)
+obj <- RunUMAP(obj, dims = 1:20)
+DimPlot(object = obj, label = FALSE)  +
+  theme_void() + ggtitle("UCAN Whole Cohort UMAP; k.param = 20, res = 0.6")
+
+# Add metadata
+m = match(colnames(obj) , gsub("-",".",Meta$DNA.Tumor.Sample.Barcode))
+obj$Tumour.Specimen.Type <- Meta$Tumour.Specimen.Type[m]
+obj$Pre.Treated <- Meta$Pre.Treated[m]
+obj$Pre.Treated.Type <- Meta$Pre.Treated.Type[m]
+obj$Gender <- Meta$Gender[m]
+obj$Age.at.diagnosis <- Meta$Age.at.diagnosis[m]
+obj$Age.group <- Meta$Age.group[m]
+obj$Primary.Site.Disease <- Meta$Primary.Site.Disease[m]
+obj$Anatomic.Organ.Subdivision <- Meta$Anatomic.Organ.Subdivision[m]
+obj$Tumour.Site <- Meta$Tumour.Site[m]
+obj$Tumour.Stage <- Meta$Tumour.Stage[m]
+obj$Tumour.Grade <- Meta$Tumour.Grade[m]
+obj$Histology.Subtype <- Meta$Histology.Subtype[m]
+obj$Hypermutated.status <- Meta$Hypermutated.status[m]
+obj$MSI.Status <- Meta$MSI.Status[m]
+obj$CMS.Tumour <- Meta$CMS.Tumour[m]
+obj$CRPS.Tumour <- Meta$CRPS.Tumour[m]
+obj$Recurrence.free.survival.days <- Meta$Recurrence.free.survival.days[m]
+obj$Overall.survival.days <- Meta$Overall.survival.days[m]
+
+# Add feature scores
+m = match(colnames(obj) , Scores$RNA.Tumor.Sample.Barcode)
+for(i in 2:ncol(Scores)){
+  obj = AddMetaData(obj, metadata = Scores[m,i], colnames(Scores)[i])
+}
+
+# Delete useless columns
+obj$pValue <- NULL
+obj$Correlation <- NULL
+obj$RMSE <- NULL
+obj$Absolute.score..sig.score. <- NULL
+obj$MPP <- NULL
+
+# Plot some of the metadata features
+DimPlot(obj, group.by = colnames(obj@meta.data)[c(5:21)]) & NoLegend() + theme(plot.title = element_text(size = 12))
+DimPlot(obj, group.by = colnames(obj@meta.data)[c(15)] , split.by = colnames(obj@meta.data)[c(15)] )
+DimPlot(obj, group.by = colnames(obj@meta.data)[c(12:15, 16, 17 )] )
+DimPlot(obj, group.by = colnames(obj@meta.data)[c(19:21)])
+VlnPlot(obj, group.by = c("Tumour.Stage"), features = c("Overall.survival.days"))
+VlnPlot(obj, group.by = c("CMS.Tumour"), features = c("Overall.survival.days"))
+VlnPlot( subset( obj , cells = row.names(obj@meta.data)[which( is.na(obj$Recurrence.free.survival.days) == F)] )  , group.by = "Tumour.Stage", features = c("Recurrence.free.survival.days","Overall.survival.days"))
+VlnPlot( subset( obj , cells = row.names(obj@meta.data)[which( is.na(obj$Recurrence.free.survival.days) == F)] )  , group.by = "CMS.Tumour", features = c("Recurrence.free.survival.days","Overall.survival.days"))
+VlnPlot( subset( obj , cells = row.names(obj@meta.data)[which( is.na(obj$Recurrence.free.survival.days) == F & obj$Tumour.Stage == "Stage III")] )  , group.by = "CMS.Tumour", features = c("Recurrence.free.survival.days","Overall.survival.days"))
+
+# Plot the rest of the metadata features
+FeaturePlot(obj, features = colnames(obj@meta.data)[c(22:23)], group.by = "CRPS.Tumour") + theme_void() + NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(22:33)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(34:45)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(46:57)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(58:69)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(70:81)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(82:93)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(94:105)]) & theme_void() & NoLegend()
+FeaturePlot(obj , features = colnames(obj@meta.data)[c(106:111)], ncol = 3) & theme_void() & NoLegend()
+#
+VlnPlot(obj, group.by = c("CMS.Tumour"), features = c("Overall.survival.days"))
+VlnPlot(obj, group.by = c("CRPS.Tumour"), features = c("Overall.survival.days"))
+
+#Save as RDS obj
+saveRDS(obj, file = "UCAN_Seurat_obj.rds")
