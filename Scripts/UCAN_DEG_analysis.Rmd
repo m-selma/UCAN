@@ -1,0 +1,1233 @@
+---
+title: "UCAN_DEG_analysis"
+output: html_document
+date: "2023-10-13"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(Seurat)
+library(patchwork)
+library(dplyr)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(ggplot2)
+library(SeuratData)
+library(DESeq2)
+library(gridExtra)
+library(reshape2)
+library('biomaRt')
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(ggdendro)
+library(rlang)
+library(grid)
+library(gtable)
+library(viridis)
+library(InteractiveComplexHeatmap)
+library(clipr)
+```
+
+Loading counts, metadata, scores
+```{r}
+# Counts, patient metadata, scores
+cnts = read.delim("~/Desktop/CRC/CRC_TPM_1063_counts.csv", sep = ',', header = T, stringsAsFactors = F, row.names = "X")
+
+Meta = read.delim("~/Desktop/CRC/Supplementary_Table_01_patient_metadata.csv", sep = ',', header = T, stringsAsFactors = F)
+
+Scores = read.delim("~/Desktop/CRC/Supplementary_Table_24.csv", sep = ',', header = T, stringsAsFactors = F)
+
+# Removing counts columns that don't have patient metadata 
+keep = which(colnames(cnts) %in% gsub("-",".",Meta$DNA.Tumor.Sample.Barcode))
+cnts = cnts[,keep]
+```
+
+OPTIONAL here - Gene mapping - my way
+```{r}
+# Making a mart object with ensembl ID to hgnc symbol equivalency
+library('biomaRt')
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- rownames(cnts)
+g_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","hgnc_symbol"),values=genes,mart= mart)
+
+# Removing duplicates
+dup = g_list$hgnc_symbol[which(duplicated(g_list$hgnc_symbol))]
+g_list$dup = FALSE
+g_list$dup[which(g_list$hgnc_symbol %in% dup)] <- TRUE
+g_list$hgnc_symbol[which(g_list$dup == TRUE)] <- g_list$ensembl_gene_id[which(g_list$dup == TRUE)]
+```
+
+```{r}
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+keep = which(rownames(cnts) %in% g_list$ensembl_gene_id ) 
+cnts = cnts[keep,]
+m = match(rownames(cnts) , g_list$ensembl_gene_id)
+rownames(cnts) <- g_list$hgnc_symbol[m]
+```
+
+Filter and reorder the metadata
+```{r}
+
+# Extract the common sample IDs
+common_sample_ids <- intersect(Meta$RNA.Tumor.Sample.Barcode, colnames(cnts))
+
+# Filter metadata to keep only common sample IDs
+meta_filtered <- Meta[Meta$RNA.Tumor.Sample.Barcode %in% common_sample_ids, ]
+
+# Reorder metadata rows to match the order of the counts matrix columns
+meta_filtered <- meta_filtered[match(colnames(cnts), meta_filtered$RNA.Tumor.Sample.Barcode), ]
+
+# Now 'meta_filtered' contains the filtered and reordered metadata
+```
+
+cnts has to be integers to make deseq obj
+```{r}
+cnts[] <- lapply(cnts, as.integer)
+```
+
+Create a DESeqDataSet obj
+```{r}
+dds <- DESeqDataSetFromMatrix(countData = cnts,
+                              colData = meta_filtered,
+                              design = ~ CRPS.Tumour)
+```
+
+Pre-filtering to keep only rows that have a count of at least 10 for a minimal number of samples. The count of 10 is a reasonable choice for bulk RNA-seq. 
+```{r}
+keep <- rowSums(counts(dds) >= 10) 
+dds <- dds[keep,]
+```
+
+Factor CRPS to get 6 levels
+```{r}
+dds$CRPS.Tumour <- factor(dds$CRPS.Tumour)
+```
+
+Specify the contrasts - must do to eliminate the bias of having CRPS1 as ref
+Actually no need bc summary gives the overall pairwise results
+```{r}
+contrast_matrix <- makeContrasts(
+  CRPS1_vs_whole = CRPS1 - (CRPS2 + CRPS3 + CRPS4 + CRPS5),
+  CRPS2_vs_whole = CRPS2 - (CRPS1 + CRPS3 + CRPS4 + CRPS5),
+  CRPS3_vs_whole = CRPS3 - (CRPS1 + CRPS2 + CRPS4 + CRPS5),
+  CRPS4_vs_whole = CRPS4 - (CRPS1 + CRPS2 + CRPS3 + CRPS5),
+  CRPS5_vs_whole = CRPS5 - (CRPS1 + CRPS2 + CRPS3 + CRPS4),
+  levels = colnames(Meta)
+)
+```
+
+Differential expression analysis
+```{r}
+dds <- DESeq(dds,test = "Wald", fitType = "parametric")
+res <- results(dds)
+#res
+```
+
+save dds obj and res 
+```{r}
+saveRDS(dds, file = "UCAN_DEG_dds.rds")
+```
+```{r}
+saveRDS(res, file = "UCAN_DEG_results.rds")
+```
+
+------- NO NEED ----------
+
+# Order genes by log2-fold change
+```{r}
+res <- results(dds)
+res <- res[order(abs(res$log2FoldChange), decreasing = TRUE), ]
+```
+don't run or else intersection with sig_genes wont work
+```{r}
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+library('biomaRt')
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- rownames(cnts)
+g_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","hgnc_symbol"),values=genes,mart= mart)
+
+# Removing duplicates
+dup = g_list$hgnc_symbol[which(duplicated(g_list$hgnc_symbol))]
+g_list$dup = FALSE
+g_list$dup[which(g_list$hgnc_symbol %in% dup)] <- TRUE
+g_list$hgnc_symbol[which(g_list$dup == TRUE)] <- g_list$ensembl_gene_id[which(g_list$dup == TRUE)]
+
+keep = which(rownames(res) %in% g_list$ensembl_gene_id ) 
+res = res[keep,]
+m = match(rownames(res) , g_list$ensembl_gene_id)
+rownames(res) <- g_list$hgnc_symbol[m]
+```
+
+```{r}
+res <- unique(res)
+```
+
+```{r}
+resFilt <- res[which(res$padj < 0.05 & abs(res$log2FoldChange) > 1), ]
+resFilt <- resFilt[order(abs(resFilt$log2FoldChange), decreasing = TRUE), ]
+```
+
+```{r}
+write.csv(resFilt, file = "~/Desktop/Top Differentially Expressed Genes - Filters: padj < 0.05 and log2FC > 1, UCAN Cohort.csv", row.names = TRUE)
+```
+
+dont run
+```{r}
+# Log-transform the data
+dds <- log2(counts(dds) + 1)
+
+# Z-score normalization
+dds <- scale(dds)
+```
+
+```{r}
+sigGenes <- rownames(res[res$padj <= 0.05 & abs(res$log2FoldChange)> 1 ,])
+sigGenes <- unique(sigGenes) 
+```
+
+Extract the ordered DEG names
+```{r}
+gene_names <- rownames(res)
+```
+
+Top 200 up and down-regulated
+```{r}
+# If you want to keep the original order, you can use the order() function
+original_order <- order(gene_names)
+
+# Extract the top 200 elements while preserving the original order
+top_200_original_order <- gene_names[original_order[1:200]]
+
+# Extract the bottom 200 elements while preserving the original order
+bottom_200_original_order <- gene_names[original_order[(length(gene_names) - 199):length(gene_names)]]
+
+# Create a list of the top up+down elements
+up_down <- c(top_200_original_order,bottom_200_original_order)
+```
+
+dds subset with top up+downregulated genes only
+```{r}
+dds <- dds[!duplicated(rownames(dds)), ] #remove duplicated genes
+gene_in_list <- rownames(dds) %in% sigGenes #select the sig ones
+dds_subset <- dds[gene_in_list, ] #keep the counts of the sig ones only
+```
+
+Dataframe of the counts for the sig genes only
+```{r}
+mat <- counts(dds_subset, normalized = TRUE)
+norm_counts_sig_genes <- as.data.frame(mat)
+```
+
+Separating the count matrix by cluster
+```{r}
+C1 <- Meta[Meta$CRPS.Tumour == "CRPS1",] #Meta subset by CRPS1 status
+C1_samples <- C1$RNA.Tumor.Sample.Barcode #extracting tumor samples barcodes
+s1 <- colnames(norm_counts_sig_genes) %in% C1_samples #keeping tumor samples of counts that are CRPS1
+
+C2 <- Meta[Meta$CRPS.Tumour == "CRPS2",]
+C2_samples <- C2$RNA.Tumor.Sample.Barcode
+s2 <- colnames(norm_counts_sig_genes) %in% C2_samples
+
+C3 <- Meta[Meta$CRPS.Tumour == "CRPS3",]
+C3_samples <- C3$RNA.Tumor.Sample.Barcode
+s3 <- colnames(norm_counts_sig_genes) %in% C3_samples
+
+C4 <- Meta[Meta$CRPS.Tumour == "CRPS4",]
+C4_samples <- C4$RNA.Tumor.Sample.Barcode
+s4 <- colnames(norm_counts_sig_genes) %in% C4_samples
+
+C5 <- Meta[Meta$CRPS.Tumour == "CRPS5",]
+C5_samples <- C5$RNA.Tumor.Sample.Barcode
+s5 <- colnames(norm_counts_sig_genes) %in% C5_samples
+#
+cluster1 <- norm_counts_sig_genes[,s1]
+cluster2 <- norm_counts_sig_genes[,s2]
+cluster3 <- norm_counts_sig_genes[,s3]
+cluster4 <- norm_counts_sig_genes[,s4]
+cluster5 <- norm_counts_sig_genes[,s5]
+```
+
+Making an averaged count matrix for each cluster and merging them
+```{r}
+CRPS1 <- as.data.frame(rowMeans(cluster1)) #row means to get an average by crps cluster
+CRPS2 <- as.data.frame(rowMeans(cluster2))
+CRPS3 <- as.data.frame(rowMeans(cluster3))
+CRPS4 <- as.data.frame(rowMeans(cluster4))
+CRPS5 <- as.data.frame(rowMeans(cluster5))
+```
+
+```{r}
+# First, add a new column to each dataframe with row names
+CRPS1$RowNames <- rownames(CRPS1) #to be able to merge by gene names
+CRPS2$RowNames <- rownames(CRPS2)
+CRPS3$RowNames <- rownames(CRPS3)
+CRPS4$RowNames <- rownames(CRPS4)
+CRPS5$RowNames <- rownames(CRPS5)
+
+# Now, merge the dataframes by row names
+merged_df <- merge(CRPS1, CRPS2, by = "RowNames", all = TRUE) # Merge df1 and df2
+merged_df <- merge(merged_df, CRPS3, by = "RowNames", all = TRUE) # Merge the result with df3
+merged_df <- merge(merged_df, CRPS4, by = "RowNames", all = TRUE) 
+merged_df <- merge(merged_df, CRPS5, by = "RowNames", all = TRUE) 
+```
+
+Rename cols
+```{r}
+names(merged_df) <- c("Genes", "CRPS1","CRPS2","CRPS3","CRmergPS4","CRPS5")
+```
+
+Get gene names
+```{r}
+#run if not previously ran
+# Making a mart object with ensembl ID to hgnc symbol equivalency
+library('biomaRt')
+mart <- useDataset("hsapiens_gene_ensembl", useMart("ensembl"))
+genes <- rownames(cnts)
+g_list <- getBM(filters= "ensembl_gene_id", attributes= c("ensembl_gene_id","hgnc_symbol"),values=genes,mart= mart)
+
+# Removing duplicates
+dup = g_list$hgnc_symbol[which(duplicated(g_list$hgnc_symbol))]
+g_list$dup = FALSE
+g_list$dup[which(g_list$hgnc_symbol %in% dup)] <- TRUE
+g_list$hgnc_symbol[which(g_list$dup == TRUE)] <- g_list$ensembl_gene_id[which(g_list$dup == TRUE)]
+```
+
+```{r}
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+rownames(merged_df) <- merged_df$Genes
+keep = which(rownames(merged_df) %in% g_list$ensembl_gene_id ) 
+merged_df = merged_df[keep,]
+m = match(rownames(merged_df) , g_list$ensembl_gene_id)
+rownames(merged_df) <- g_list$hgnc_symbol[m]
+```
+
+```{r}
+merged_df$Genes <- NULL #deleting gene column; we only need rownames
+```
+
+```{r}
+merged_df <- merged_df %>% mutate_all(~ round(., digits = 0)) #rounding to whole numbers
+```
+
+Export as csv files
+```{r}
+write.csv(merged_df, file = "~/Desktop/Top Differentially Expressed Genes 2, UCAN Cohort.csv", row.names = TRUE)
+```
+ 
+---
+
+Transform count data using the variance stablilizing transform, to remove the dependence of the variance on the mean.
+```{r}
+deseq2VST <- vst(dds, blind=TRUE) #blind=true refers to ignoring the design's influence on the calcs
+```
+
+Convert the DESeq transformed object to a data frame. -> Extracted these transformed values with the assay() function and converted the resulting object to a data frame with a column for gene id’s.
+```{r}
+deseq2VST <- assay(deseq2VST)
+deseq2VST <- as.data.frame(deseq2VST)
+```
+
+
+```{r}
+deseq2VST$Gene <- rownames(deseq2VST)
+head(deseq2VST)
+```
+
+Keep only the significantly differentiated genes where the fold-change was at least 3 -> used the differential expression results we had previously obtained to filter our transformed matrix to only those genes which were significantly differentially expressed (q-value <= .05) and with a log2 fold change greater than 3.
+```{r}
+gene_in_list <- rownames(deseq2VST) %in% sigGenes
+deseq2VST <- deseq2VST[gene_in_list,]
+```
+
+Order patients by CRPS cluster
+```{r}
+rownames(Meta)<-Meta$RNA.Tumor.Sample.Barcode
+Meta <- Meta %>% arrange(CRPS.Tumour)
+grouped_samples <- rownames(Meta)
+```
+
+```{r}
+common_elements <- intersect(grouped_samples, colnames(deseq2VST))
+grouped_samples <- grouped_samples[grouped_samples %in% common_elements]
+```
+
+Reorder deseq2VST
+```{r}
+deseq2VST <- deseq2VST[, grouped_samples]
+deseq2VST$Gene <- rownames(deseq2VST)
+```
+
+
+Up to this point our transformed values have been in “wide” format, however ggplot2 required long format. We achieve this with melt() function from the reshape2 package.
+```{r}
+# Convert the VST counts to long format for ggplot2
+
+# First compare wide vs long version
+deseq2VST_wide <- deseq2VST
+deseq2VST_long <- melt(deseq2VST, id.vars=c("Gene"))
+
+head(deseq2VST_wide)
+head(deseq2VST_long)
+```
+
+Now overwrite our original data frame with the long format
+```{r}
+deseq2VST <- melt(deseq2VST, id.vars=c("Gene"))
+```
+
+Make a heatmap
+```{r}
+heatmap <- ggplot(deseq2VST, aes(x=variable, y=Gene, fill=value)) + geom_raster() + scale_fill_viridis(trans="sqrt") + theme(axis.text.x=element_blank(), axis.ticks.y=element_blank()) #+ facet_grid(rows = vars(CRPS.Tumour))
+heatmap
+```
+
+
+## Perform clustering
+
+The first step is to convert our transformed values back to wide format using dcast() with row names and columns names as genes and samples respectively.
+```{r}
+# Convert the significant genes back to a matrix for clustering
+deseq2VSTMatrix <- dcast(deseq2VST, Gene ~ variable)
+rownames(deseq2VSTMatrix) <- deseq2VSTMatrix$Gene
+deseq2VSTMatrix$Gene <- NULL
+```
+
+```{r}
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+keep = which(rownames(deseq2VSTMatrix) %in% g_list$ensembl_gene_id ) 
+deseq2VSTMatrix = deseq2VSTMatrix[keep,]
+m = match(rownames(deseq2VSTMatrix) , g_list$ensembl_gene_id)
+rownames(deseq2VSTMatrix) <- g_list$hgnc_symbol[m]
+```
+
+
+Next we can compute a distance matrix using dist() which will compute the distance based on the rows of our data frame. This will give us the distance matrix based on our genes, but we also want a distance matrix based on the samples, for this we simply have to transpose our matrix before calling dist() with the function t().
+```{r}
+# Compute a distance calculation on both dimensions of the matrix
+distanceGene <- dist(deseq2VSTMatrix)
+distanceSample <- dist(t(deseq2VSTMatrix))
+```
+
+From there we can perform hierarchical clustering with the hclust() function.
+We then install the ggdendro package to construct a dendrogram as described in their vignette.
+```{r}
+# Cluster based on the distance calculations
+clusterGene <- hclust(distanceGene, method="average")
+clusterSample <- hclust(distanceSample, method="average")
+```
+
+Finally we re-create the heatmap to match the dendrogram using the factor() function to re-order how samples are plotted.
+```{r}
+# Construct a dendogram for samples
+library(ggdendro)
+sampleModel <- as.dendrogram(clusterGene)
+sampleDendrogramData <- segment(dendro_data(sampleModel, type = "rectangle"))
+sampleDendrogram <- ggplot(sampleDendrogramData) + geom_segment(aes(x = x, y = y, xend = xend, yend = yend)) + theme_dendro()
+```
+
+```{r}
+# Re-factor samples for ggplot2
+deseq2VST$variable <- factor(deseq2VST$variable, levels=clusterSample$labels[clusterSample$order])
+```
+
+```{r}
+deseq2VST$Gene <- rownames(deseq2VSTMatrix)
+```
+
+
+```{r}
+# Construct the heatmap. note that at this point we have only clustered the samples NOT the genes
+heatmap <- ggplot(deseq2VST, aes(x=variable, y=Gene, fill=value)) + geom_raster() + labs(y = "Genes", x = "Tumor Samples")+ scale_fill_viridis(trans="sqrt") + theme(axis.text.x=element_blank(), axis.ticks.y=element_blank())
+heatmap
+```
+
+Because ggplot plots use grid graphics underneath we can use the gridExtra package to combine both plots into one with the function grid.arrange().
+```{r}
+# Combine the dendrogram and the heatmap
+grid.arrange(sampleDendrogram, heatmap, ncol=2, heights=c(1,5))
+```
+
+Adjusting dendrogram to plot
+```{r}
+# Load in libraries necessary for modifying plots
+#install.packages("gtable")
+library(gtable)
+library(grid)
+
+# Modify the ggplot objects
+sampleDendrogram_1 <- sampleDendrogram + scale_x_continuous(expand=c(.0085, .0085)) + scale_y_continuous(expand=c(0, 0))
+heatmap_1 <- heatmap + scale_x_discrete(expand=c(0, 0)) + scale_y_discrete(expand=c(0, 0))
+
+# Convert both grid based objects to grobs
+sampleDendrogramGrob <- ggplotGrob(sampleDendrogram_1)
+heatmapGrob <- ggplotGrob(heatmap_1)
+
+# Check the widths of each grob
+sampleDendrogramGrob$widths
+heatmapGrob$widths
+
+# Add in the missing columns
+sampleDendrogramGrob <- gtable_add_cols(sampleDendrogramGrob, heatmapGrob$widths[7], 6)
+sampleDendrogramGrob <- gtable_add_cols(sampleDendrogramGrob, heatmapGrob$widths[8], 7)
+
+# Make sure every width between the two grobs is the same
+maxWidth <- unit.pmax(sampleDendrogramGrob$widths, heatmapGrob$widths)
+sampleDendrogramGrob$widths <- as.list(maxWidth)
+heatmapGrob$widths <- as.list(maxWidth)
+
+# Arrange the grobs into a plot
+finalGrob <- arrangeGrob(sampleDendrogramGrob, heatmapGrob, ncol=1, heights=c(2,5))
+
+# Draw the plot
+grid.draw(finalGrob)
+```
+
+Add CRPS status
+
+```{r}
+Meta2 <- Meta
+Meta2 <- Meta2[Meta2$RNA.Tumor.Sample.Barcode %in% grouped_samples, ]
+```
+
+```{r}
+# Get the index positions of the sample IDs in the list
+index_positions <- match(Meta2$RNA.Tumor.Sample.Barcode, grouped_samples)
+
+# Reorder the rows based on the index positions
+Meta2 <- Meta2[order(index_positions), ]
+```
+
+Construct a plot to show the CRPS data
+```{r}
+# Construct a plot to show the CRPS data
+colours <- c("#FF5733", "#2E86AB", "#F2C53D", "#93E8F1", "#75B79E","#900C3F")
+sampleClinical <- ggplot(Meta2, aes(x=RNA.Tumor.Sample.Barcode, y=1, fill=CRPS.Tumour)) + geom_tile() + scale_x_discrete(expand=c(0, 0)) + scale_y_discrete(expand=c(0, 0)) + scale_fill_manual(name="CRPS Status", values=colours)+ theme_void()
+
+# Convert the clinical plot to a grob
+sampleClinicalGrob <- ggplotGrob(sampleClinical)
+
+# Make sure every width between all grobs is the same
+maxWidth <- unit.pmax(sampleDendrogramGrob$widths, heatmapGrob$widths, sampleClinicalGrob$widths)
+sampleDendrogramGrob$widths <- as.list(maxWidth)
+heatmapGrob$widths <- as.list(maxWidth)
+sampleClinicalGrob$widths <- as.list(maxWidth)
+
+# Arrange and output the final plot
+finalGrob <- arrangeGrob( sampleClinicalGrob, heatmapGrob, ncol=1, heights=c(1,5))
+grid.draw(finalGrob)
+```
+
+--------- RESUME HERE -------
+
+FROM YOUTUBE TUTORIAL
+
+make deg results into df
+```{r}
+res <- unique(res)
+res_df <- as.data.frame(res)
+```
+
+Doing some gene selection on res
+```{r}
+res_df <- res_df[(abs(res_df$log2FoldChange)>1)&(res_df$padj<0.05),]
+#res_df <- res_df[(res_df$baseMean>50)&(abs(res_df$log2FoldChange)>1)&(res_df$padj<0.05),]
+```
+
+Get gene names in hdnc symbole if needed
+```{r}
+# Replacing row names of count matrix from ENSEMBL ID to HGNC symbol/name equivalent
+keep = which(rownames(res_df) %in% g_list$ensembl_gene_id ) 
+res_df = res_df[keep,]
+m = match(rownames(res_df) , g_list$ensembl_gene_id)
+res_df$symbols <- g_list$hgnc_symbol[m]
+```
+
+Get a counts matrix with only deg's
+```{r}
+counts2 <- counts(dds, normalized = TRUE)[rownames(res_df),] #only the ones we selected
+```
+
+Get z score for each row/gene
+```{r}
+counts2_z <- t(apply(counts2,1,scale)) 
+```
+
+Rename the cols of the matrix - then apply same order as the grouped_samples CRPS clusters
+```{r}
+colnames(counts2_z) <- colnames(counts2)
+```
+
+Then
+```{r}
+common_elements <- intersect(grouped_samples, colnames(counts2_z))
+grouped_samples2 <- grouped_samples[grouped_samples %in% common_elements]
+counts2_z <- counts2_z[, match(grouped_samples2, colnames(counts2_z))]
+```
+
+Gene mapping before plotting IF NEEDED
+```{r}
+keep = which(rownames(counts2_z) %in% g_list$ensembl_gene_id ) 
+counts2_z = counts2_z[keep,]
+m = match(rownames(counts2_z) , g_list$ensembl_gene_id)
+rownames(counts2_z) <- g_list$hgnc_symbol[m]
+```
+
+Get heatmap
+```{r}
+library(ComplexHeatmap)
+
+custom_split = rep("CRPS1", 1051)
+custom_split[300:587] = "CRPS2"
+custom_split[588:805] = "CRPS3"
+custom_split[806:935] = "CRPS4"
+custom_split[936:1048] = "CRPS5"
+custom_split[1049:1051] = "Undefined"
+
+#ht_opt$TITLE_PADDING = unit(c(8.5, 8.5), "points")
+hm <- Heatmap(counts2_z,cluster_rows = TRUE,
+              cluster_columns = FALSE, 
+              name="Z-score",
+              show_column_dend = FALSE,
+              row_labels = rownames(counts2_z), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              border_gp = gpar(col = "black",lw=20),
+              column_title = c("CRPS1","CRPS2","CRPS3","CRPS4","CRPS5",""),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#DAF7A6", "#FFC300", "#FF5733", "#C70039", "#900C3F","#581845")) ,
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              column_split = custom_split,
+              column_gap = unit(0.7, "mm"),
+              
+              )
+hm 
+```
+
+Create slices
+```{r}
+c1 <- counts2_z[,1:299]
+c2 <- counts2_z[,300:587]
+c3 <- counts2_z[,588:805]
+c4 <- counts2_z[,806:935]
+c5 <- counts2_z[,936:1048]
+c6 <- counts2_z[,1049:1051]
+```
+
+Not this 
+```{r}
+# Define the ranges for each subset
+slices <- list(c(1, 299), c(300, 587), c(588, 805), c(806, 935), c(936, 1048), c(1049, 1051))
+
+# Create empty lists to store the results
+distanceSampleList <- list()
+clusterSampleList <- list()
+
+# Iterate through each slice
+for (i in 1:length(slices)) {
+  # Extract the subset from counts2_z
+  current_slice <- counts2_z[, slices[[i]]]
+  
+  # Calculate distance and clustering
+  distanceSample <- dist(t(current_slice))
+  clusterSample <- hclust(distanceSample, method = "average")
+  
+ # Assign the results to individual objects
+  assign(paste0("clusterSample", i), clusterSample)
+}
+```
+
+Nope
+```{r}
+# 1. Calculate the distance matrix
+dist_matrix1 <- dist(t(c1))
+
+# 2. Perform hierarchical clustering
+hclust_result1 <- hclust(dist_matrix1, method = "average")
+
+# 3. Reorder the columns based on clusters
+cluster_assignments <- cutree(hclust_result1, k = 1)
+reordered_matrix <- c1[, order(cluster_assignments)]
+
+# 4. Visualize the reordered matrix
+Heatmap(reordered_matrix,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              name="Z-score",
+              show_column_dend = FALSE,
+              row_labels = rownames(reordered_matrix), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              )
+```
+
+Subset annotations of relevant metadata; reorder cols according to clusters
+```{r}
+meta2 <- Meta_corrected[,c("CRPS.Tumour","CMS.Tumour", "MSI.Status","Tumour.Stage","Pre.Treated","iCMS.pred")]
+rownames(meta2)<-Meta_corrected[,"RNA.Tumor.Sample.Barcode"]
+meta2 <- meta2[rownames(meta2) %in% colnames(dds),]
+#split by CRPS status to conserve the grouping in the heatmap
+meta2_1 <- meta2[meta2$CRPS.Tumour =="CRPS1", ]
+meta2_2 <- meta2[meta2$CRPS.Tumour =="CRPS2", ]
+meta2_3 <- meta2[meta2$CRPS.Tumour =="CRPS3", ]
+meta2_4 <- meta2[meta2$CRPS.Tumour =="CRPS4", ]
+meta2_5 <- meta2[meta2$CRPS.Tumour =="CRPS5", ]
+meta2_6 <- meta2[meta2$CRPS.Tumour =="Undefined", ]
+#Transpose dataframes
+# meta2_1 <- t(meta2_1)
+# meta2_2 <- t(meta2_2)
+# meta2_3 <- t(meta2_3)
+# meta2_4 <- t(meta2_4)
+# meta2_5 <- t(meta2_5)
+# meta2_6 <- t(meta2_6)
+#Making them into df
+#Transpose dataframes
+meta2_1 <- as.data.frame(meta2_1)
+meta2_2 <- as.data.frame(meta2_2)
+meta2_3 <- as.data.frame(meta2_3)
+meta2_4 <- as.data.frame(meta2_4)
+meta2_5 <- as.data.frame(meta2_5)
+meta2_6 <- as.data.frame(meta2_6)
+#Get col order from heatmap after clustering
+# column_order <- column_order(h_list) # RUN ONCE then don't run again
+# then use write_clip(column_order$matrix_xyz) to copy it into clipboard and make your own vectors
+un <- c(
+  183, 268, 145, 182, 177, 62, 106, 290, 256, 103, 272, 107, 120, 217, 135, 154, 146, 185, 171, 75,
+  259, 6, 115, 275, 149, 187, 232, 276, 143, 174, 264, 294, 277, 14, 286, 33, 297, 189, 196, 82,
+  287, 78, 279, 265, 283, 40, 88, 99, 95, 70, 248, 46, 83, 141, 266, 194, 269, 291, 64, 175, 181,
+  289, 274, 257, 68, 285, 76, 172, 179, 142, 260, 293, 262, 123, 124, 190, 184, 218, 191, 131, 96,
+  71, 193, 263, 140, 222, 44, 127, 111, 87, 43, 58, 34, 25, 188, 85, 199, 98, 163, 72, 4, 130, 61,
+  2, 144, 48, 219, 21, 17, 51, 169, 56, 77, 90, 134, 122, 211, 224, 198, 23, 214, 292, 119, 91, 52,
+  66, 73, 148, 235, 202, 118, 16, 138, 281, 243, 252, 94, 22, 150, 168, 39, 18, 221, 27, 128, 213,
+  200, 284, 54, 167, 212, 216, 7, 13, 155, 35, 267, 59, 42, 67, 108, 36, 225, 280, 132, 236, 278, 1,
+  5, 29, 180, 53, 298, 271, 204, 31, 152, 92, 228, 100, 237, 229, 157, 258, 176, 105, 151, 273, 86,
+  173, 158, 38, 209, 147, 26, 116, 20, 299, 28, 63, 60, 81, 195, 24, 32, 178, 3, 69, 50, 207, 210,
+  47, 226, 249, 8, 206, 192, 57, 41, 49, 139, 253, 251, 255, 227, 247, 220, 246, 245, 203, 296, 165,
+  102, 270, 288, 282, 234, 215, 121, 239, 244, 136, 261, 104, 250, 12, 241, 110, 15, 65, 156, 231, 11,
+  89, 79, 208, 201, 160, 186, 19, 101, 84, 74, 30, 197, 233, 170, 159, 164, 129, 117, 112, 114, 9,
+  238, 230, 242, 162, 153, 137, 161, 93, 97, 10, 254, 55, 113, 166, 109, 45, 133, 240, 80, 126, 37,
+  125, 205, 223, 295
+)
+deux <- c(7, 190, 103, 237, 91, 13, 205, 28, 218, 214, 230, 248, 48, 6, 146, 249, 8, 25, 212, 225, 217, 33, 126, 147, 73, 3, 152, 286, 1, 144, 98, 200, 160, 206, 287, 29, 220, 213, 121, 197, 142, 282, 266, 209, 231, 222, 199, 133, 53, 219, 283, 82, 66, 175, 102, 284, 241, 154, 221, 31, 35, 47, 46, 88, 203, 72, 24, 101, 204, 138, 115, 182, 85, 136, 191, 256, 253, 250, 139, 97, 120, 22, 278, 170, 59, 63, 272, 208, 128, 41, 158, 178, 19, 198, 113, 67, 5, 277, 262, 71, 18, 240, 119, 81, 54, 12, 164, 76, 166, 233, 235, 224, 51, 207, 44, 122, 163, 64, 187, 239, 159, 20, 57, 16, 238, 39, 226, 234, 109, 99, 246, 236, 74, 4, 151, 92, 17, 84, 86, 176, 65, 100, 135, 112, 134, 108, 179, 141, 183, 264, 181, 80, 153, 201, 173, 94, 242, 211, 227, 14, 105, 156, 243, 194, 116, 79, 254, 252, 268, 185, 169, 137, 30, 106, 21, 167, 232, 130, 162, 188, 62, 15, 161, 36, 43, 96, 56, 210, 149, 93, 90, 260, 55, 189, 186, 38, 145, 263, 196, 118, 111, 271, 265, 275, 269, 288, 285, 267, 202, 180, 244, 255, 87, 143, 114, 140, 70, 168, 83, 107, 78, 52, 148, 281, 155, 193, 172, 27, 77, 37, 69, 216, 68, 259, 215, 184, 192, 228, 61, 9, 10, 110, 132, 58, 171, 32, 2, 279, 125, 195, 26, 23, 174, 257, 270, 280, 276, 157, 75, 131, 104, 247, 245, 258, 124, 274, 117, 89, 129, 127, 34, 95, 251, 40, 11, 150, 165, 60, 50, 123, 45, 42, 261, 229, 49, 177, 273,223
+          )
+trois <- c(124, 170, 148, 1, 10, 166, 50, 184, 205, 57, 161, 61, 214, 187, 192, 212, 182, 186, 140, 13, 101, 122, 77, 203, 7, 109, 174, 197, 100, 153, 64, 215, 157, 11, 162, 179, 131, 129, 158, 181, 189, 213, 183, 177, 44, 14, 59, 72, 75, 65, 93, 112, 47, 19, 12, 160, 211, 88, 90, 87, 172, 35, 146, 94, 45, 25, 99, 43, 150, 204, 4, 16, 118, 21, 71, 32, 114, 2, 85, 98, 17, 26, 108, 9, 121, 27, 55, 143, 8, 58, 126, 194, 3, 39, 191, 89, 82, 81, 15, 79, 106, 151, 29, 171, 196, 173, 40, 139, 117, 104, 28, 110, 185, 145, 113, 84, 49, 92, 137, 60, 70, 200, 48, 41, 178, 218, 156, 168, 147, 91, 37, 46, 67, 54, 30, 144, 68, 63, 120, 36, 128, 42, 216, 207, 209, 159, 167, 96, 195, 135, 141, 52, 125, 154, 149, 163, 51, 83, 123, 127, 206, 78, 130, 86, 115, 38, 33, 138, 142, 165, 176, 164, 155, 34, 6, 199, 208, 24, 136, 107, 69, 22, 5, 175, 169, 20, 188, 201, 105, 23, 74, 66, 133, 18, 102, 210, 95, 152, 217, 193, 56, 31, 97, 53, 62, 198, 76, 111, 103, 73, 190, 132, 119, 116, 80, 134, 202, 180
+           )
+quatre <- c(2, 11, 35, 58, 64, 56, 36, 116, 126, 37, 66, 29, 15, 17, 114, 27, 43, 47, 109, 106, 44, 51, 65, 25, 95, 113, 26, 96, 98, 57, 32, 127, 85, 107, 18, 84, 78, 6, 105, 129, 42, 41, 28, 16, 8, 69, 67, 77, 30, 9, 52, 71, 4, 55, 45, 76, 31, 1, 62, 54, 122, 104, 38, 63, 111, 5, 48, 14, 20, 50, 3, 86, 80, 82, 83, 75, 13, 93, 99, 87, 22, 21, 100, 7, 39, 60, 73, 94, 68, 92, 23, 110, 33, 34, 118, 117, 119, 101, 120, 59, 12, 88, 49, 61, 70, 53, 102, 79, 81, 91, 90, 103, 108, 97, 115, 121, 123, 10, 46, 24, 19, 112, 124, 130, 40, 125, 72, 128, 89, 74
+            )
+cinq <- c(1, 36, 77, 3, 82, 25, 67, 101, 68, 33, 97, 93, 72, 85, 104, 107, 79, 90, 78, 45, 44, 86, 61, 98, 73, 99, 10, 42, 14, 95, 102, 106, 103, 4, 35, 49, 63, 89, 71, 92, 32, 110, 2, 8, 52, 50, 66, 28, 100, 7, 20, 69, 41, 30, 108, 87, 91, 96, 105, 109, 31, 60, 24, 54, 65, 38, 43, 56, 70, 27, 12, 37, 16, 58, 26, 22, 53, 18, 17, 11, 21, 34, 62, 112, 15, 29, 83, 13, 51, 48, 9, 111, 40, 5, 64, 74, 75, 76, 55, 57, 46, 23, 94, 39, 81, 19, 59, 6, 113, 47, 80, 88, 84
+          )
+six <-c(1,2,3)
+#reorder the rows to match the order of the unsupervised clustering done by chm
+### THIS IS WHERE THE ISSUE COMES FROM WHEN THERE ARE NO ANNOTATIONS FOR CRPS2-5
+### EVERY NEW ITERATION OF THE HEATMAP CHANGES THE NAME OF THE COLS OF COLUMN_ORDER SO CHANGE ACCORDINGLY
+meta2_1 <- meta2_1[ un,]
+meta2_2 <- meta2_2[  deux,]
+meta2_3 <- meta2_3[  trois,]
+meta2_4 <- meta2_4[  quatre,]
+meta2_5 <- meta2_5[  cinq,]
+meta2_6 <- meta2_6[  six,]
+```
+
+Annotation heatmaps
+```{r}
+# Define the colors you want for your annotation
+cols <- list(
+  CMS.Tumour = c("CMS1" = "#76448A", "CMS2" = "#85C1E9", "CMS3" = "#16A085", "CMS4" = "#0E6655", "Undefined" = "#EAECEE"),
+  MSI.Status = c("MSS" = "#9FE2BF", "MSI" = "#2E86C1"),
+  Tumour.Stage = c("Stage I" = "#DFFF00", "Stage II" = "#FF7F50", "Stage III" = "#DE3163", "Stage IV" = "#43081A"),
+  Pre.Treated = c("Treated" = "#6495ED", "Untreated" = "#CCCCFF"), 
+  iCMS.pred = c('iCMS2'="#D35400", 'iCMS3'="#1E8449","Undefined"="#EAECEE")
+) 
+
+anno1 <- HeatmapAnnotation(df=meta2_1[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           col = cols)
+anno2 <- HeatmapAnnotation(df=meta2_2[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno3 <- HeatmapAnnotation(df=meta2_3[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno4 <- HeatmapAnnotation(df=meta2_4[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno5 <- HeatmapAnnotation(df=meta2_5[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+anno6 <- HeatmapAnnotation(df=meta2_6[,-1],
+                           annotation_name_side = "left",
+                           show_legend=TRUE,
+                           show_annotation_name = FALSE,
+                           col = cols)
+#then run again the heatmap script
+```
+
+HEATMAP
+```{r}
+library(grid)
+
+h1 <- Heatmap(c1,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              name="Z-score",
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c1), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+                            border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS1"),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              bottom_annotation = anno1
+              )
+
+h2 <- Heatmap(c2,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c2), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS2"),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno2
+              )
+
+h3 <- Heatmap(c3,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c3), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS3"),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno3
+              )
+
+h4 <- Heatmap(c4,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c4), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS4"),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno4
+              )
+
+h5 <- Heatmap(c5,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c5), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("CRPS5"),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno5
+              )
+
+h6 <- Heatmap(c6,cluster_rows = TRUE,
+              cluster_columns = TRUE, 
+              show_column_dend = FALSE,
+              column_dend_side = "bottom", 
+              row_labels = rownames(c6), 
+              show_column_names = FALSE,
+              row_names_gp = gpar(fontsize = 5),
+              column_names_gp = gpar(fontsize = 5),
+              row_names_side = "left", 
+              row_dend_side = "left", 
+              row_names_centered = FALSE,
+              border_gp = gpar(col = "#EAECEE",lw=20),
+              column_title = c("."),
+              column_title_gp = gpar(fontsize = 8, 
+                                     fontface = "bold",fill = c("#EAECEE"), border="#EAECEE"),
+              show_heatmap_legend = FALSE,
+              bottom_annotation = anno6
+              )
+
+h_list = h1+h2+h3+h4+h5+h6
+h_list = draw(h_list, ht_gap = unit(0.8, "mm"), merge_legend=TRUE)
+```
+
+Making it interactive
+```{r}
+htShiny(h_list)
+```
+
+#############
+iCMS
+The two intrinsic subtypes, iCMS2 and iCMS3, refine CMS. iCMS3 comprises microsatellite unstable (MSI-H) cancers and one-third of microsatellite-stable (MSS) tumors. iCMS3 MSS cancers are transcriptomically more similar to MSI-H cancers than to other MSS cancers. CMS4 cancers had either iCMS2 or iCMS3 epithelium; the latter had the worst prognosis. 
+
+To better understand the cell-specific changes that underpin CRC, the authors collected single-cell gene expression data from tumour and normal-tissue samples from 63 patients with CRC across five independent cohorts. These data were first used to identify epithelial cells and select them for further analysis, as epithelial cells represent the malignant drivers of CRC. Dimension reduction analysis showed that malignant epithelial cells separated into two distinct clusters based on gene expression, predicted copy number alterations or inferred transcription factor activity. The authors defined these two clusters as representing intrinsic epithelial subtypes, subsequently named intrinsic-consensus molecular subtypes 2 and 3 (iCMS2 and iCMS3).
+
+Method
+Eleven bulk tumor transcriptomes were compiled and analyzed individually to assign tumors to different clusters. Briefly, expression values in each dataset were first z-score transformed and then subjected to the nearest template prediction (ntp) algorithm implemented in CMScaller (31). iCMS marker genes were used for analysis. Through 1,000 random permutations, samples were assigned to each iCMS, except for those with FDR > 0.05, which were assigned as “indetermined.”
+
+Loading table of up/downregulated genes for iCMS2/3
+```{r}
+markers <- read.delim("~/Desktop/CRC/Selma/supp_table.csv", sep = ',', header = T, stringsAsFactors = F)
+```
+
+Checking that we have 716 unique markers
+```{r}
+marker_list <- unique(c(markers$iCMS2_Up,markers$iCMS2_Down,markers$iCMS3_Up,markers$iCMS3_Down))
+marker_list_iCMS2 <- unique(c(markers$iCMS2_Up,markers$iCMS3_Down))
+marker_list_iCMS3 <- unique(c(markers$iCMS3_Up,markers$iCMS2_Down))
+```
+
+Splitting markers by iCMS type
+```{r}
+iCMS2 <- unique(c(markers$iCMS2_Up,markers$iCMS3_Down))
+iCMS2_df <- data.frame(markers = iCMS2, status = 'iCMS2')
+iCMS3 <- unique(c(markers$iCMS3_Up,markers$iCMS2_Down))
+#iCMS3 <- c(iCMS3, rep('', length(iCMS2) - length(iCMS3)))
+iCMS3_df <- data.frame(markers = iCMS3,status = 'iCMS3')
+i2_i3 <- rbind(iCMS2_df,iCMS3_df)
+i2_i3$status <- factor(i2_i3$status)
+```
+
+Saving dataframe
+```{r}
+write.csv(i2_i3, file = "iCMS Markers.csv", row.names = FALSE)
+```
+
+Markers - no need 
+```{r}
+icmsmarkers = i2_i3
+by_status = split(icmsmarkers,icmsmarkers$status)
+features = lapply(by_status, function(x){x[,1]})
+```
+
+Getting counts in hgnc symbol
+```{r}
+Cnts <- cnts
+keep = which(rownames(Cnts) %in% g_list$ensembl_gene_id ) 
+Cnts = Cnts[keep,]
+m = match(rownames(Cnts) , g_list$ensembl_gene_id)
+rownames(Cnts) <- g_list$hgnc_symbol[m]
+```
+
+
+####
+iCMS2-3 PREDICTION - WORKS
+####
+
+IF NEEDED
+```{r}
+keep = which(rownames(cnts) %in% g_list$ensembl_gene_id )
+cnts = cnts[keep,]
+m = match(rownames(cnts) , g_list$ensembl_gene_id)
+rownames(cnts) <- g_list$hgnc_symbol[m]
+#
+```
+
+Matrix form
+```{r}
+cnts_mat <- as.matrix(cnts)
+```
+
+log2-transform and quantile normalize RNA-seq data
+```{r}
+cnts_mat <- limma::normalizeQuantiles(log2(cnts_mat+.25))
+```
+
+```{r}
+# scale and center data, basically a wrapper for scale() function
+library(CMScaller)
+cnts_mat <- ematAdjust(cnts_mat)
+```
+####### Nearest template prediction
+clean emat - for distCosine 0-imputation should be tested
+```{r}
+keepP <- stats::complete.cases(cnts_mat)
+if (sum(!keepP) > 0) {
+    cnts_mat <- cnts_mat[keepP,,drop = FALSE]
+}
+```
+clean markers df
+```{r}
+keepT <- i2_i3$markers %in% rownames(cnts_mat)
+if (sum(!keepT) > 0) {
+    i2_i3 <- i2_i3[keepT,]
+}
+```
+prepareInput 
+```{r}
+N <- ncol(cnts_mat)
+K <- nlevels(i2_i3$status)
+S <- nrow(i2_i3)
+P <- nrow(cnts_mat)
+```
+
+```{r}
+class.names <- levels(i2_i3$status)
+i2_i3$status <- as.numeric(i2_i3$status)
+```
+
+```{r}
+# provide warning if emat seems non-normalized
+cnts_mat.mean <- round(mean(cnts_mat),2)
+if (abs(cnts_mat.mean) >1) {
+    isnorm <- " <- check feature centering!"
+    cnts_mat.sd <- round(stats::sd(cnts_mat),2)
+    warning(paste0("emat mean=", cnts_mat.mean, "; sd=", cnts_mat.sd, isnorm),
+            call.=FALSE)
+}
+```
+output classification overview
+```{r}
+feat.class <- paste(range(table(i2_i3$status)),collapse = "-")
+# matching vector for cnts_mat and markers df
+mm <- match(i2_i3$markers, rownames(cnts_mat),nomatch = 0)
+
+if (!all(rownames(cnts_mat)[mm] == i2_i3$markers)) {
+    stop("error matching probes, check rownames(cnts_mat) and i2_i3$markers")
+}
+
+# if features are reused across classes sample(..., replace=TRUE)
+pReplace <- length(i2_i3$markers) > length(unique(i2_i3$markers))
+```
+prepareTemplates
+```{r}
+tmat <- matrix(rep(i2_i3$status,K), ncol = K) # templates matrix
+for (k in seq_len(K)) tmat[,k] <- as.numeric(tmat[,k] == k)
+if (K == 2) tmat[tmat==0] <- -1
+```
+selectDistance
+```{r}
+sim_fn <- function(x,y) corCosine(x,y)
+simToDist <- function(cos.sim) sqrt(1/2 * (1-cos.sim))
+```
+ntpFunction 
+```{r}
+ ntp_fn <- function(n) {
+
+        # sample-templates correlations
+        n.sim <- as.vector(sim_fn(cnts_mat[mm,n, drop = FALSE],tmat))
+
+        # optimized for speed not readability
+        # matrix(emat[,n][sample.int... makes permuted matrix
+        # apply(simFun... calculates correlation and return max value
+
+        n.sim.perm.max <- apply(sim_fn(
+                matrix(cnts_mat[,n][sample.int(P, S*nPerm, replace=TRUE)],
+                       ncol = nPerm), tmat), 1, max)
+
+
+        n.ntp <- which.max(n.sim)
+        # estimate p-value
+        n.sim.ranks <- rank(-c(n.sim[n.ntp],(n.sim.perm.max)))
+        n.pval <- n.sim.ranks[1]/length(n.sim.ranks)
+
+        # return results
+        return(c(
+            n.ntp,                # prediction
+            simToDist(n.sim),     # distance to all templates
+            n.pval))              # p-value
+    }
+```
+
+OPTION 1
+If not setting a seed and ncores  - enforce PARALLELIZED processing
+```{r}
+# paralellizedPrediction ##################################################
+    # try parallelization if package is available and nCores not set to 1
+
+# About nCores:
+# If nCores is equal to 0 (nCores == 0 is TRUE), it means that the user hasn't specified the number of CPU cores explicitly.
+#In this case, the code executes parallel::detectCores(). detectCores() is a function from the "parallel" package in R. It automatically detects the number of available CPU cores on the system and returns this value.
+#If nCores is not equal to 0 (i.e., the user has specified a non-zero value), the code simply returns the user-specified value stored in nCores.
+
+### If not setting a seed and ncores  
+nPerm <- 1000
+nCores=0
+funVal <- vector(mode = "numeric", length = 2+K)
+
+nCores <-  ifelse(nCores == 0,
+                    parallel::detectCores(),
+                    nCores)
+
+options(mc.cores = nCores)
+
+# avoids un-neccessary dispatches but
+# memory and system.time scales with nPerm
+nParts <- split(seq_len(N), cut(seq_len(N), nCores, labels=FALSE))
+
+res3 <- parallel::mclapply(nParts, function(n)
+    vapply(n, ntp_fn, funVal))
+res3 <- data.frame(t(do.call(cbind, res3)))
+
+# Prepare Output
+colnames(res3) <- c("prediction",
+                       paste0("d.",class.names),
+                      "p.value")
+
+res3$prediction <- factor(class.names[res3$prediction], levels = class.names)
+rownames(res3) <- colnames(cnts_mat)
+res3$p.value[res3$p.value < 1/nPerm] <- 1/nPerm
+res3$FDR <- stats::p.adjust(res3$p.value, "fdr")
+
+# returnOutput 
+res3
+```
+
+OPTION2
+If setting a seed and ncores - enforce SERIAL processing 
+```{r}
+# Serialized Prediction
+nPerm <- 500
+set.seed(7423)
+nCores <- 1 # Always set ncores to 1 if seed is set
+
+res2 <- lapply (seq_len(N), ntp_fn)
+res2 <- data.frame(do.call(rbind,res2))
+
+# Prepare Output
+colnames(res2) <- c("prediction",
+                       paste0("d.",class.names),
+                      "p.value")
+
+res2$prediction <- factor(class.names[res2$prediction], levels = class.names)
+rownames(res2) <- colnames(cnts_mat)
+res2$p.value[res2$p.value < 1/nPerm] <- 1/nPerm
+res2$FDR <- stats::p.adjust(res2$p.value, "fdr")
+
+# returnOutput 
+res2
+```
+
+####
+Add to Meta
+####
+
+```{r}
+Meta_corrected <- Meta[Meta$RNA.Tumor.Sample.Barcode %in% rownames(res2),]
+m = match(Meta_corrected$RNA.Tumor.Sample.Barcode, rownames(res2))
+Meta_corrected$iCMS.pred <- res2$prediction[m]
+Meta_corrected$iCMS.pval <- res2$p.value[m]
+```
+
+Add new category: undefined for pval >= 0.05
+```{r}
+Meta_corrected$iCMS.pred <- as.character(Meta_corrected$iCMS.pred)
+Meta_corrected$iCMS.pred[Meta_corrected$iCMS.pval > 0.05] <- "Undefined"
+Meta_corrected$iCMS.pred <- as.factor(Meta_corrected$iCMS.pred)
+```
+
+Remove the column that causes issues
+```{r}
+Meta_corrected$Age.group = NULL
+```
+
+Save as .csv file
+```{r}
+write.csv(Meta_corrected, file = "~/Desktop/CRC/Selma/Meta_w_iCMS_status_vers3.csv", row.names = TRUE)
+```
+
+
+NOTE: parallel processing pval <= 0.05 425/626 T/F; serial processing 422/629 T/F
+Need to optimize ntp algo to get better accuracy
+
+Optimization:
+• Increase nPerm from 1000 to 10,000 to get more accurate p-values. That will also increase computation time so may need to strike a balance between precision and computation time.
+• How to enhance sim_fn? Choice of similarity function can significantly impact your predictions. Is it appropriate for data? Truy different similarity measures to see if another one provides better results.
+Options I have are c("cosine", "pearson", "spearman", "kendall"). 
+- Cosine best for count data. Consider using cosine similarity when working with count data, such as gene expression counts. It measures the cosine of the angle between two vectors, making it suitable for high-dimensional data like gene expression profiles.Good for high-dimentionality data.Interpretation: Cosine similarity ranges from -1 to 1. Here's how to interpret the results:
+1: Perfect alignment, meaning the vectors are in the same direction.
+0: Orthogonal (90-degree angle), indicating no similarity.
+-1: Perfect misalignment, vectors are in opposite directions.
+
+Details about the different similarity functions:
+- Pearson Correlation: Suitable for: Continuous data with a linear relationship.
+- Spearman Rank Correlation: Suitable for: Non-linear and non-parametric relationships.
+- Kendall Tau Rank Correlation: Suitable for: Non-linear, non-parametric, and monotonic relationships.
+
+Then set:
+
+ if (distance == "cosine") {
+        sim_fn <- function(x,y) corCosine(x,y)
+    } else {
+        sim_fn <- function(x, y) {
+            stats::cor(x, y, method = distance)
+        }
+    }
+- Ensemble Methods: use them to combine the predictions from multiple iterations or similarity functions to improve prediction accuracy.
+
+
+```{r}
+norm_counts <- counts(dds, normalized = T)
+norm_counts <- as.data.frame(norm_counts)
+norm_counts$description <- NA
+norm_counts$Features <- rownames(norm_counts)
+features <- norm_counts$Features 
+descriptions <- norm_counts$description 
+```
+
+Trying to do gct stuff for genepattern
+```{r}
+norm_counts <- subset(norm_counts, select=c(Features,description,CRC.SW.U0293.T:CRC.SW.UM079.T))
+```
+
+```{r}
+write.csv(norm_counts, "norm_counts.csv", row.names = F)
+```
+
+```{r}
+fid <- "norm_counts.gct" 
+writeLines(c("#1.2", paste(nrow(norm_counts), ncol(norm_counts) - 2, collapse="\t")), fid, sep="\n")
+write.table(norm_counts, file=fid, quote=FALSE, row.names=FALSE, col.names=TRUE, sep="\t", append = TRUE)
+```
+
+
