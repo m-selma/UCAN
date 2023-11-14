@@ -1,0 +1,233 @@
+library(Seurat)
+library(patchwork)
+library(dplyr)
+library(ComplexHeatmap)
+library(RColorBrewer)
+library(ggplot2)
+library(SeuratData)
+library(DESeq2)
+library(gridExtra)
+library(reshape2)
+library('biomaRt')
+library(DESeq2)
+library(ggplot2)
+library(pheatmap)
+library(ggdendro)
+library(rlang)
+library(grid)
+library(gtable)
+library(viridis)
+library(InteractiveComplexHeatmap)
+library(clipr)
+
+# Counts
+cnts = read.delim("~/Counts.csv", sep = ',', header = T, stringsAsFactors = F, row.names = "X")
+
+# Metadata
+meta = read.delim("~/Patient_metadata_w_iCMS.csv", sep = ',', header = T, stringsAsFactors = F)
+rownames(meta) = meta$RNA.Tumor.Sample.Barcode
+
+# Keeping only the samples for which we have metadata
+cnts = cnts[,which(colnames(cnts) %in% rownames(meta))]
+
+### With res = 0.6, PC =20, NN = 20
+cnts <- round(cnts)
+obj <- CreateSeuratObject(counts = Matrix::Matrix(as.matrix(cnts),sparse = T))
+obj <- NormalizeData(obj) #Normalized values are stored in obj[["RNA"]]@data.
+obj <- FindVariableFeatures(obj, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(obj)
+obj <- ScaleData(obj, features = all.genes) #mean expression across cells is 0, variance across cells is 1, results of this are stored in obj[["RNA"]]@scale.data
+obj <- RunPCA(obj, features = VariableFeatures(object = obj))
+
+ElbowPlot(obj) #let's do 20 PCs 
+
+#
+obj <- FindNeighbors(obj, dims = 1:20,k.param = 20)
+obj <- FindClusters(obj, resolution = 0.6)
+obj <- RunUMAP(obj, dims = 1:20)
+DimPlot(obj) + theme_void() 
+
+# Visualize distribution of samples
+idents <- Idents(obj)
+meta_crps = meta[,c(5,35)]
+idents_df <- data.frame(cluster_1to5 = idents)
+idents_df$RNA.Tumor.Sample.Barcode <- rownames(idents_df)
+
+#reorder idents_df based on row order of meta_crps
+idents_df <- idents_df[match(row.names(meta_crps), row.names(idents_df)), ]
+merged_df <- merge(idents_df, meta_crps, by = "RNA.Tumor.Sample.Barcode", all = TRUE)
+table(merged_df[,c(2,3)])
+
+rename clusters according to highest # of matches
+obj = RenameIdents(obj,
+                   `1` = 'CRPS1',
+                   `0` = 'CRPS2',`4` = 'CRPS3',
+                  `2` = 'CRPS4',
+                  `3` = 'CRPS5')
+
+# 1->1, 0->2, 3->5, 2->4, 4 -> 3
+merged_df$cluster_1to5 <- gsub("\\b0\\b", "c2", merged_df$cluster_1to5)
+merged_df$cluster_1to5 <- gsub("\\b3\\b", "c5", merged_df$cluster_1to5)
+merged_df$cluster_1to5 <- gsub("\\b2\\b", "c4", merged_df$cluster_1to5)
+merged_df$cluster_1to5 <- gsub("\\b4\\b", "c3", merged_df$cluster_1to5)
+merged_df$cluster_1to5 <- gsub("\\b1\\b", "c1", merged_df$cluster_1to5)
+
+colnames(merged_df) <- c("RNA.Tumor.Sample.Barcode","Selma_CRPS","Uppsala_CRPS")
+table(merged_df[,c(2,3)])
+
+
+DimPlot(obj, cols = c("#DAF7A6","#FFC300","#FF5733","#C70039","#900C3F"), label = TRUE) + theme_void() + ggtitle("Whole Cohort UMAP, De Novo Unsupervised Clustering with res = 0.6, PC = 20, NN = 20, n = 1051 samples") + theme(plot.title = element_text(hjust = 0.5, vjust = 1))
+
+
+### WITH 20 NN, 20 PCA, 0.9 res
+
+obj2 <- CreateSeuratObject(counts = Matrix::Matrix(as.matrix(cnts),sparse = T))
+obj2 <- NormalizeData(obj2) #Normalized values are stored in obj[["RNA"]]@data.
+obj2 <- FindVariableFeatures(obj2, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(obj2)
+obj2 <- ScaleData(obj2, features = all.genes) #mean expression across cells is 0, variance across cells is 1, results of this are stored in obj[["RNA"]]@scale.data
+obj2 <- RunPCA(obj, features = VariableFeatures(object = obj2))
+obj2 <- FindNeighbors(obj2, dims = 1:20, k.param = 20)
+obj2 <- FindClusters(obj2, resolution = 0.9, dims = 1:20)
+obj2 <- RunUMAP(obj2, dims = 1:20)
+DimPlot(obj2) +theme_void()
+
+idents2 <- Idents(obj2)
+idents_df2 <- data.frame(cluster_1to5_v2 = idents2)
+idents_df2$RNA.Tumor.Sample.Barcode <- rownames(idents_df2)
+idents_df2 <- idents_df2[match(row.names(meta_crps), row.names(idents_df2)), ]
+
+merged_df2 <- merge(idents_df2, meta_crps, by = "RNA.Tumor.Sample.Barcode", all = TRUE)
+table(merged_df2[,c(2,3)])
+
+merged_df2$cluster_1to5_v2 <- gsub("\\b0\\b", "c1", merged_df2$cluster_1to5_v2)
+merged_df2$cluster_1to5_v2 <- gsub("\\b1\\b", "c2", merged_df2$cluster_1to5_v2)
+merged_df2$cluster_1to5_v2 <- gsub("\\b2\\b", "c3", merged_df2$cluster_1to5_v2)
+merged_df2$cluster_1to5_v2 <- gsub("\\b3\\b", "c4", merged_df2$cluster_1to5_v2)
+merged_df2$cluster_1to5_v2 <- gsub("\\b4\\b", "c5", merged_df2$cluster_1to5_v2)
+
+table(merged_df[,c(2,3)])
+table(merged_df2[,c(2,3)])
+
+
+### WITH 18 NN, 19 PCA, 0.8 res
+obj3 <- CreateSeuratObject(counts = Matrix::Matrix(as.matrix(cnts),sparse = T))
+obj3 <- NormalizeData(obj3) #Normalized values are stored in obj[["RNA"]]@data.
+obj3 <- FindVariableFeatures(obj3, selection.method = "vst", nfeatures = 2000)
+all.genes <- rownames(obj3)
+obj3 <- ScaleData(obj, features = all.genes) #mean expression across cells is 0, variance across cells is 1, results of this are stored in obj[["RNA"]]@scale.data
+obj3 <- RunPCA(obj3, features = VariableFeatures(object = obj3))
+#
+obj3 <- FindNeighbors(obj, k.param = 15)
+obj3 <- FindClusters(obj3, resolution = 0.8, dims = 1:18)
+obj3 <- RunUMAP(obj3, dims = 1:19)
+DimPlot(obj3) + theme_void()
+
+idents3 <- Idents(obj3)
+idents_df3 <- data.frame(cluster_1to6 = idents3)
+idents_df3$RNA.Tumor.Sample.Barcode <- rownames(idents_df3)
+idents_df3 <- idents_df3[match(row.names(meta_crps), row.names(idents_df3)), ]
+
+merged_df3 <- merge(idents_df3, meta_crps, by = "RNA.Tumor.Sample.Barcode", all = TRUE)
+table(merged_df3[,c(2,3)]) 
+
+merged_df3$cluster_1to6 <- gsub("\\b0\\b", "c2", merged_df3$cluster_1to6)
+merged_df3$cluster_1to6 <- gsub("\\b3\\b", "c3", merged_df3$cluster_1to6)
+merged_df3$cluster_1to6 <- gsub("\\b2\\b", "c4", merged_df3$cluster_1to6)
+merged_df3$cluster_1to6 <- gsub("\\b4\\b", "c5", merged_df3$cluster_1to6)
+merged_df3$cluster_1to6 <- gsub("\\b1\\b", "c1", merged_df3$cluster_1to6)
+merged_df3$cluster_1to6 <- gsub("\\b5\\b", "c6", merged_df3$cluster_1to6)
+
+table(merged_df[,c(2,3)])
+table(merged_df2[,c(2,3)])
+table(merged_df3[,c(2,3)]) 
+
+----
+### ASSEMBLE RESULTS
+final_merged_df <- merge(merged_df, merged_df2, by = "RNA.Tumor.Sample.Barcode", all = TRUE)
+final_merged_df <- merge(final_merged_df, merged_df3, by = "RNA.Tumor.Sample.Barcode", all = TRUE)
+
+final_merged_df$CRPS.Tumour.x <- NULL
+final_merged_df$CRPS.Tumour.y <- NULL
+
+final_merged_df <- final_merged_df %>% arrange(CRPS.Tumour)
+
+write.csv(final_merged_df, file = "Clustering_results.csv", row.names = FALSE)
+
+# Load the ggplot2 library
+library(ggplot2)
+library(tidyr)
+# Define the order based on your original dataframe
+desired_order <- unique(final_merged_df$RNA.Tumor.Sample.Barcode)
+
+# Convert SampleID to a factor with the desired order
+final_merged_df$RNA.Tumor.Sample.Barcode <- factor(final_merged_df$RNA.Tumor.Sample.Barcode, levels = desired_order)
+
+# Reshape the data to long format
+df_long <- pivot_longer(final_merged_df, cols = c(cluster_1to6, cluster_1to5_v2, cluster_1to5,CRPS.Tumour), names_to = "Variable", values_to = "Value")
+
+# Define the order for the variables in the heatmap
+desired_order2 <- c("cluster_1to6", "cluster_1to5_v2", "cluster_1to5", "CRPS.Tumour")
+
+# Convert the 'Variable' column to a factor with the desired order
+df_long$Variable <- factor(df_long$Variable, levels = desired_order2)
+
+# Create the heatmap using ggplot2
+heatmap_plot <- ggplot(df_long, aes(x = RNA.Tumor.Sample.Barcode, y = Variable, fill = Value)) +
+  geom_tile(stat = "identity",color = "NA") +
+  scale_fill_manual(values = c("CRPS1" = "#DAF7A6", "CRPS2" = "#FFC300",
+                               "CRPS3" = "#FF5733", "CRPS4" = "#C70039", "CRPS5" = "#900C3F",
+                               "Undefined" = "grey", "c1"="#DAF7A6","c2"="#FFC300","c3"="#FF5733","c4"="#C70039","c5"="#900C3F","c6"="pink")) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+   xlab("Tumor Sample Barcodes") +  # Set the x-axis label
+  ylab("") +
+  
+  guides(
+  fill = guide_legend(
+    title = "Unsupervised Clustering/
+    CRPS Assignments",
+    ncol = 2,
+    bycol = TRUE
+    )
+  )
+
+
+print(heatmap_plot)
+
+# Load the ggplot2 library
+library(ggplot2)
+library(tidyr)
+
+meta_c$RNA.Tumor.Sample.Barcode = rownames(meta_c)
+
+# Reshape the data to long format
+meta_long <- pivot_longer(meta_c, cols = c(CRPS.Tumour, CMS.Tumour, iCMS.pred,Tumour.Stage,MSI.Status,Pre.Treated), names_to = "Variable", values_to = "Value")
+
+# Create the heatmap using ggplot2
+heatmap_plot <- ggplot(meta_long, aes(x = RNA.Tumor.Sample.Barcode, y = Variable, fill = Value)) +
+  geom_tile(stat = "identity",color = "NA") +
+  scale_fill_manual(values = c("CRPS1" = "#DAF7A6", "CRPS2" = "#FFC300",
+                               "CRPS3" = "#FF5733", "CRPS4" = "#C70039", "CRPS5" = "#900C3F",
+                               "Undefined" = "#EAECEE",
+                               "CMS1" = "#76448A", "CMS2" = "#85C1E9", "CMS3" = "#16A085", "CMS4" = "#0E6655", "Undefined" = "#EAECEE",
+                               "MSS" = "#9FE2BF", "MSI" = "#2E86C1",
+                               "Stage I" = "#DFFF00", "Stage II" = "#FF7F50", "Stage III" = "#DE3163", "Stage IV" = "#43081A",
+                               "Treated" = "#6495ED", "Untreated" = "#CCCCFF",
+                               'iCMS2'="#D35400", 'iCMS3'="#1E8449","Undefined"="#EAECEE")) +
+  theme_minimal() +
+  theme(axis.text.x = element_blank()) +
+   xlab("Tumor Sample Barcodes") +  # Set the x-axis label
+  ylab("") +
+  
+  guides(
+  fill = guide_legend(
+    title = "Unsupervised Clustering/
+    CRPS Assignments",
+    ncol = 2,
+    bycol = TRUE
+    )
+  )
+
+
+print(heatmap_plot)
